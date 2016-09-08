@@ -1,0 +1,13 @@
+#!/usr/bin/env ansible-playbook
+---
+
+# Creates a new instance in godaddy internal cloud.
+- name: Launch needed 'map' VM instance.
+  hosts: localhost
+  os_server:
+    state: present
+    name: os-map-1
+    wait: true
+    key_name: lappy
+    auth:
+        auth_url: https://openstack.int.godaddy.com:35357/v2.0
