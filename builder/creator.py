@@ -47,6 +47,13 @@ def find_cent7_image(cloud):
         return image_by_names[str(image_by_names_ver[0])]
 
 
+def get_server_ip(server):
+    ip = server.get('private_v4')
+    if not ip:
+        ip = server.get('accessIPv4')
+    return ip
+
+
 def az_sorter(az1, az2):
     if 'cor' in az1 and 'cor' not in az2:
         return 1
@@ -56,6 +63,21 @@ def az_sorter(az1, az2):
         return -1
     if 'cor' not in az1 and 'cor' not in az2:
         return 0
+
+
+def wait_for_ssh(args, cloud, servers):
+    """Waits until the servers created can be ssh(ed) into."""
+    print("Waiting for ssh connectivity is verified, please wait...")
+    for _kind, (server, server_ip) in servers.items():
+        print("  Ensuring %s@%s is reachable,"
+              " please wait..." % (server.name, server_ip))
+        utils.ssh_connect(server_ip, verbose=bool(args.verbose))
+    return servers
+
+
+def transform(args, cloud, servers):
+    """Turn raw servers into useful things."""
+    pass
 
 
 def create(args, cloud):
@@ -109,15 +131,17 @@ def create(args, cloud):
     for line in blob.splitlines():
         print("  " + line)
     servers = {}
+    servers_with_ip = {}
     with open(args.hosts, 'a+b', 0) as fh:
         for kind, details in topo.items():
             name = details['name']
             print("Creating instance %s, please wait..." % (name))
-            servers[kind] = cloud.create_server(
+            server = cloud.create_server(
                 details['name'], image,
                 flavors[kind], auto_ip=False, wait=True,
                 key_name=args.key_name,
                 availability_zone=details['availability_zone'])
+            server[kind] = server
             if args.verbose:
                 print("Instance creation complete:")
                 blob = pprint.pformat(servers[kind])
@@ -131,3 +155,13 @@ def create(args, cloud):
             fh.flush()
             fh.write(utils.prettify_yaml(servers))
             fh.flush()
+            # Do this after, so that the destroy entrypoint will work/be
+            # able to destroy things even if this happens...
+            server_ip = get_server_ip(server)
+            if not server_ip:
+                raise RuntimeError("Instance %s created but no ip"
+                                   " was found associated" % server.name)
+            servers_with_ip[kind] = (server, server_ip)
+    # Now turn those into something useful...
+    transform(args, cloud,
+        wait_for_ssh(args, cloud, servers_with_ip))
