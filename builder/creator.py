@@ -1,10 +1,9 @@
+import os
 import random
-import string
 
 from concurrent import futures
 from distutils.version import LooseVersion
-
-from iniparse import ConfigParser
+import yaml
 
 from builder import pprint
 from builder import utils
@@ -105,12 +104,11 @@ def az_sorter(az1, az2):
 
 
 def transform(args, cloud, servers):
-    """Turn raw servers into useful things."""
+    """Turn (mostly) raw servers into useful things."""
     pass
 
 
-def create(args, cloud):
-    """Create a new environment."""
+def create_with_prior(args, cloud, hosts_handle):
     # Due to some funkiness with our openstack we have to list out
     # the az's and pick one, typically favoring ones with 'cor' in there
     # name.
@@ -161,37 +159,39 @@ def create(args, cloud):
         print("  " + line)
     servers = {}
     servers_and_ip = {}
-    with open(args.hosts, 'a+b', 0) as fh:
-        for kind, details in topo.items():
-            name = details['name']
-            print("Spawning instance %s, please wait..." % (name))
-            server = cloud.create_server(
-                details['name'], image,
-                flavors[kind], auto_ip=False, wait=True,
-                key_name=args.key_name,
-                availability_zone=details['availability_zone'],
-                meta=create_meta(cloud), userdata=DEF_USERDATA)
-            servers[kind] = server
-            if args.verbose:
-                print("Instance spawn complete:")
-                blob = pprint.pformat(servers[kind])
-                for line in blob.splitlines():
-                    print("  " + line)
-            else:
-                print("Instance spawn complete.")
-            # Rewrite the file...
-            fh.seek(0)
-            fh.truncate()
-            fh.flush()
-            fh.write(utils.prettify_yaml(servers))
-            fh.flush()
-            # Do this after, so that the destroy entrypoint will work/be
-            # able to destroy things even if this happens...
-            server_ip = get_server_ip(server)
-            if not server_ip:
-                raise RuntimeError("Instance %s spawned but no ip"
-                                   " was found associated" % server.name)
-            servers_and_ip[kind] = (server, server_ip)
+    for kind, details in topo.items():
+        name = details['name']
+        print("Spawning instance %s, please wait..." % (name))
+        server = cloud.create_server(
+            details['name'], image,
+            flavors[kind], auto_ip=False, wait=True,
+            key_name=args.key_name,
+            availability_zone=details['availability_zone'],
+            meta=create_meta(cloud), userdata=DEF_USERDATA)
+        servers[kind] = server
+        if args.verbose:
+            print("Instance spawn complete:")
+            blob = pprint.pformat(servers[kind])
+            for line in blob.splitlines():
+                print("  " + line)
+        else:
+            print("Instance spawn complete.")
+        # Rewrite the file...
+        hosts_handle.seek(0)
+        hosts_handle.truncate()
+        hosts_handle.flush()
+        hosts_handle.write(utils.prettify_yaml(servers))
+        hosts_handle.flush()
+        # Do this after, so that the destroy entrypoint will work/be
+        # able to destroy things even if this happens...
+        server_ip = get_server_ip(server)
+        if not server_ip:
+            raise RuntimeError("Instance %s spawned but no ip"
+                               " was found associated" % server.name)
+        servers_and_ip[kind] = (server, server_ip)
+    # No longer needed (so close it out).
+    hosts_handle.close()
+    hosts_handle = None
     # Validate that we can connect into them.
     print("Validating connectivity"
           " using %s threads, please wait..." % SSH_VALIDATION_THREADS)
@@ -205,6 +205,7 @@ def create(args, cloud):
             fut.kind = kind
             futs.append(fut)
     try:
+        # Reform with the futures results...
         servers = {}
         for fut in futs:
             servers[fut.kind] = {
@@ -219,7 +220,25 @@ def create(args, cloud):
         # Ensure all machines opened (without error) are now closed.
         while futs:
             fut = futs.pop()
-            if fut.exception() is not None:
-                continue
-            machine = fut.result()
-            machine.close()
+            try:
+                machine = fut.result()
+            except Exception:
+                pass
+            else:
+                machine.close()
+
+
+def create(args, cloud):
+    """Create a new environment."""
+    with open(args.hosts, 'a+b') as hosts_handle:
+        hosts_handle.seek(0)
+        existing_instances = yaml.load(hosts_handle.read())
+        if existing_instances:
+            raise RuntimeError("The current file at '%s'"
+                               " is not empty (it has %s instances listed)"
+                               ", please run the 'destroy'"
+                               " routine with that file to clear it"
+                               " out." % (args.hosts,
+                                          len(existing_instances)))
+        hosts_handle.seek(0)
+        create_with_prior(args, cloud, hosts_handle)
