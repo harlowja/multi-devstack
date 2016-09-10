@@ -112,16 +112,19 @@ def create(args, cloud):
     with open(args.hosts, 'a+b', 0) as fh:
         for kind, details in topo.items():
             name = details['name']
-            print("Building %s (%s), please wait..." % (name, kind))
+            print("Creating instance %s, please wait..." % (name))
             servers[kind] = cloud.create_server(
                 details['name'], image,
                 flavors[kind], auto_ip=False, wait=True,
                 key_name=args.key_name,
                 availability_zone=details['availability_zone'])
-            print("Built:")
-            blob = pprint.pformat(servers[kind])
-            for line in blob.splitlines():
-                print("  " + line)
+            if args.verbose:
+                print("Instance creation complete:")
+                blob = pprint.pformat(servers[kind])
+                for line in blob.splitlines():
+                    print("  " + line)
+            else:
+                print("Instance creation complete.")
             # Rewrite the file...
             fh.seek(0)
             fh.truncate()
