@@ -27,12 +27,8 @@ be done:
         OS_USERNAME=jxharlow
         OS_TENANT_NAME=user-jxharlow
 
-3. Run the ``make_vms`` (ansible) playbook (you may need to edit this
-   and the shell scripts that will be processed to adjust names
-   of servers or names of keys that you are using in your cloud).
-
-    For example::
-
-        $ ansible-playbook playbooks/make_vms.yaml -e "user=$USER" -e "key_name=lappy"
+3. Run the ``build.py`` python and follow the interactive steps to
+   get yourself a machine (if it fails run ``build.py --clean`` before
+   re-running).
 
 .. _devstack: http://docs.openstack.org/developer/devstack/

@@ -1,2 +1,4 @@
-ansible
+plumbum
 shade
+iniparse
+yaml
