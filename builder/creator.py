@@ -168,7 +168,7 @@ def create(args, cloud):
         with open(args.hosts, 'a+b', 0) as fh:
             for kind, details in topo.items():
                 name = details['name']
-                print("Creating instance %s, please wait..." % (name))
+                print("Spawning instance %s, please wait..." % (name))
                 server = cloud.create_server(
                     details['name'], image,
                     flavors[kind], auto_ip=False, wait=True,
@@ -177,12 +177,12 @@ def create(args, cloud):
                     meta=meta, userdata=DEF_USERDATA)
                 servers[kind] = server
                 if args.verbose:
-                    print("Instance creation complete:")
+                    print("Instance spawn complete:")
                     blob = pprint.pformat(servers[kind])
                     for line in blob.splitlines():
                         print("  " + line)
                 else:
-                    print("Instance creation complete.")
+                    print("Instance spawn complete.")
                 # Rewrite the file...
                 fh.seek(0)
                 fh.truncate()
@@ -193,7 +193,7 @@ def create(args, cloud):
                 # able to destroy things even if this happens...
                 server_ip = get_server_ip(server)
                 if not server_ip:
-                    raise RuntimeError("Instance %s created but no ip"
+                    raise RuntimeError("Instance %s spawned but no ip"
                                        " was found associated" % server.name)
                 useful_servers[kind] = (server, server_ip,
                                         wait_for_ssh(args, server, server_ip))
