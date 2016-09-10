@@ -46,7 +46,7 @@ def main():
                                default=None)
     parser_create.add_argument("-k", "--key-name",
                                help="key name to use when creating"
-                                    " instance(s)", default=None)
+                                    " instances", required=True)
     parser_create.set_defaults(func=creator.create)
 
     args = parser.parse_args()

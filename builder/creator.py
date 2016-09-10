@@ -9,6 +9,30 @@ from builder import pprint
 from builder import utils
 
 
+DEF_USER = 'devstack'
+DEF_USERDATA = """#!/bin/bash
+set -x
+
+# Install some common things...
+yum install git nano -y
+
+# Creat the user we want...
+tobe_user=%(USER)s
+id -u $tobe_user &>/dev/null
+if [ $? -ne 0 ]; then
+    useradd $tobe_user --groups root --gid 0 -m -s /bin/bash -d "/home/$tobe_user"
+fi
+
+cat > /etc/sudoers.d/99-%(USER)s << EOF
+# Automatically generated at slave creation time.
+# Do not edit.
+$tobe_user ALL=(ALL) NOPASSWD:ALL
+EOF
+
+# Get devstack ready to go...
+git clone git://git.openstack.org/openstack-dev/devstack /home/%(USER)s/devstack
+chown -R %(USER)s /home/%(USER)s
+""" % {'USER': DEF_USER}
 DEV_TOPO = tuple([
     ('cap', '%(user)s-cap-%(rand)s'),
     ('map', '%(user)s-map-%(rand)s'),
@@ -65,14 +89,11 @@ def az_sorter(az1, az2):
         return 0
 
 
-def wait_for_ssh(args, cloud, servers):
+def wait_for_ssh(args, server, server_ip):
     """Waits until the servers created can be ssh(ed) into."""
-    print("Waiting for ssh connectivity is verified, please wait...")
-    for _kind, (server, server_ip) in servers.items():
-        print("  Ensuring %s@%s is reachable,"
-              " please wait..." % (server.name, server_ip))
-        utils.ssh_connect(server_ip, verbose=bool(args.verbose))
-    return servers
+    print("Ensuring %s (at ip %s) is reachable via ssh,"
+          " please wait..." % (server.name, server_ip))
+    return utils.ssh_connect(server_ip, verbose=bool(args.verbose))
 
 
 def transform(args, cloud, servers):
@@ -131,7 +152,17 @@ def create(args, cloud):
     for line in blob.splitlines():
         print("  " + line)
     servers = {}
-    servers_with_ip = {}
+    useful_servers = {}
+    meta = {
+        "login_users": "DC1\\%s" % cloud.auth['username'],
+        "login_groups": "DC1\\ac_devcloud",
+        "created_by": cloud.auth['username'],
+        "project_name": cloud.auth['project_name'],
+        # We can't use this correctly, because the ssh validation
+        # never works out if we do try to use this... perhaps a later
+        # fix needed...
+        'disable_pbis': 'true',
+    }
     with open(args.hosts, 'a+b', 0) as fh:
         for kind, details in topo.items():
             name = details['name']
@@ -140,8 +171,9 @@ def create(args, cloud):
                 details['name'], image,
                 flavors[kind], auto_ip=False, wait=True,
                 key_name=args.key_name,
-                availability_zone=details['availability_zone'])
-            server[kind] = server
+                availability_zone=details['availability_zone'],
+                meta=meta, userdata=DEF_USERDATA)
+            servers[kind] = server
             if args.verbose:
                 print("Instance creation complete:")
                 blob = pprint.pformat(servers[kind])
@@ -161,7 +193,7 @@ def create(args, cloud):
             if not server_ip:
                 raise RuntimeError("Instance %s created but no ip"
                                    " was found associated" % server.name)
-            servers_with_ip[kind] = (server, server_ip)
+            useful_servers[kind] = (server, server_ip,
+                                    wait_for_ssh(args, server, server_ip))
     # Now turn those into something useful...
-    transform(args, cloud,
-        wait_for_ssh(args, cloud, servers_with_ip))
+    transform(args, cloud, useful_servers)

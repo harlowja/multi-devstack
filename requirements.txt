@@ -2,3 +2,4 @@ plumbum
 shade
 iniparse
 yaml
+paramiko

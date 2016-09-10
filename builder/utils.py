@@ -1,10 +1,12 @@
+import socket
 import time
 import traceback
 
 import yaml
 
+import paramiko
 import plumbum
-from plumbum import SshMachine
+from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 
 
 def prettify_yaml(obj):
@@ -16,29 +18,30 @@ def prettify_yaml(obj):
 
 def ssh_connect(ip, connect_timeout=1.0,
                 max_backoff=32, max_attempts=10,
-                verbose=False):
+                verbose=False, user=None):
     attempt = 1
     connected = False
     machine = None
     while not connected:
         try:
             machine = SshMachine(
-                ip, connect_timeout=connect_timeout)
+                ip, connect_timeout=connect_timeout,
+                missing_host_policy=paramiko.AutoAddPolicy(),
+                user=user)
         except (plumbum.machines.session.SSHCommsChannel2Error,
-                plumbum.machines.session.SSHCommsError) as e:
+                plumbum.machines.session.SSHCommsError, socket.error,
+                paramiko.ssh_exception.AuthenticationException) as e:
+            print("Failed to connect to %s" % (ip))
             if verbose:
-                print("Failed to connect to %s" % (ip))
                 traceback.print_exc()
             backoff = min(max_backoff, 2 ** attempt)
             attempt += 1
             if attempt > max_attempts:
                 raise IOError("Could not connect (over ssh) to"
                               " %s after %i attempts" % (ip, attempt - 1))
-            if verbose:
-                print("Trying again in %s seconds..." % (backoff))
+            print("Trying again in %s seconds..." % (backoff))
             time.sleep(backoff)
         else:
-            if verbose:
-                print("Ssh connected to %s" % ip)
+            print("Ssh connected to %s" % ip)
             connected = True
     return machine
