@@ -128,7 +128,7 @@ def create(args, cloud):
             raise RuntimeError("Can not create '%s' instances without"
                                " matching flavor '%s'" % (kind, kind_flv))
         flavors[kind] = flv
-    print("Building the following instances in availability zone: %s" % az)
+    print("Spawning the following instances in availability zone: %s" % az)
     topo = {}
     for kind, name_tpl in DEV_TOPO:
         tpl_vals = {
