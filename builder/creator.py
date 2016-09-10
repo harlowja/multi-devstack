@@ -218,7 +218,7 @@ def create(args, cloud):
     finally:
         # Ensure all machines opened (without error) are now closed.
         while futs:
-            fut = fut.pop()
+            fut = futs.pop()
             if fut.exception() is not None:
                 continue
             machine = fut.result()
