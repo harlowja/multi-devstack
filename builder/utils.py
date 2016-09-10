@@ -39,7 +39,10 @@ def ssh_connect(ip, connect_timeout=1.0,
             if attempt > max_attempts:
                 raise IOError("Could not connect (over ssh) to"
                               " %s after %i attempts" % (ip, attempt - 1))
-            print("%sTrying again in %s seconds..." % (indent, backoff))
+            more_attempts = max_attempts - attempt
+            print("%sTrying again in"
+                  " %s seconds (%s attempts left)..." % (indent, backoff,
+                                                         more_attempts))
             time.sleep(backoff)
         else:
             print("%sSsh connected to %s" % (indent, ip))
