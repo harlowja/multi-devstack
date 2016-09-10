@@ -50,6 +50,20 @@ DEV_FLAVORS = {
 }
 
 
+def create_meta(cloud):
+    meta = {
+        "login_users": "DC1\\%s" % cloud.auth['username'],
+        "login_groups": "DC1\\ac_devcloud",
+        "created_by": cloud.auth['username'],
+        "project_name": cloud.auth['project_name'],
+        # We can't use this correctly, because the ssh validation
+        # never works out if we do try to use this... perhaps a later
+        # fix needed...
+        'disable_pbis': 'true',
+    }
+    return meta
+
+
 def find_cent7_image(cloud):
     images = cloud.list_images()
     possible_images = []
@@ -147,16 +161,6 @@ def create(args, cloud):
         print("  " + line)
     servers = {}
     servers_and_ip = {}
-    meta = {
-        "login_users": "DC1\\%s" % cloud.auth['username'],
-        "login_groups": "DC1\\ac_devcloud",
-        "created_by": cloud.auth['username'],
-        "project_name": cloud.auth['project_name'],
-        # We can't use this correctly, because the ssh validation
-        # never works out if we do try to use this... perhaps a later
-        # fix needed...
-        'disable_pbis': 'true',
-    }
     with open(args.hosts, 'a+b', 0) as fh:
         for kind, details in topo.items():
             name = details['name']
@@ -166,7 +170,7 @@ def create(args, cloud):
                 flavors[kind], auto_ip=False, wait=True,
                 key_name=args.key_name,
                 availability_zone=details['availability_zone'],
-                meta=meta, userdata=DEF_USERDATA)
+                meta=create_meta(cloud), userdata=DEF_USERDATA)
             servers[kind] = server
             if args.verbose:
                 print("Instance spawn complete:")
