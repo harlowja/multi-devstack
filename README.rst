@@ -27,8 +27,8 @@ be done:
         OS_USERNAME=jxharlow
         OS_TENANT_NAME=user-jxharlow
 
-3. Run the ``build.py`` python and follow the interactive steps to
-   get yourself a machine (if it fails run ``build.py --clean`` before
-   re-running).
+3. Run the ``./build create`` python and watch the steps trigger that
+   once successful will have build yourself a cluster (if it
+   fails **ensure to run** ``./build destroy`` before re-running).
 
 .. _devstack: http://docs.openstack.org/developer/devstack/
