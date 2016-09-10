@@ -3,3 +3,5 @@ shade
 iniparse
 yaml
 paramiko
+monotonic
+futures

@@ -1,6 +1,7 @@
 import random
 import string
 
+from concurrent import futures
 from distutils.version import LooseVersion
 
 from iniparse import ConfigParser
@@ -8,7 +9,7 @@ from iniparse import ConfigParser
 from builder import pprint
 from builder import utils
 
-
+SSH_VALIDATION_THREADS = 2
 DEF_USER = 'devstack'
 DEF_USERDATA = """#!/bin/bash
 set -x
@@ -89,14 +90,6 @@ def az_sorter(az1, az2):
         return 0
 
 
-def wait_for_ssh(args, server, server_ip):
-    """Waits until the servers created can be ssh(ed) into."""
-    print("Ensuring %s (at ip %s) is reachable via ssh,"
-          " please wait..." % (server.name, server_ip))
-    return utils.ssh_connect(server_ip, verbose=bool(args.verbose),
-                             indent="  ")
-
-
 def transform(args, cloud, servers):
     """Turn raw servers into useful things."""
     pass
@@ -153,7 +146,7 @@ def create(args, cloud):
     for line in blob.splitlines():
         print("  " + line)
     servers = {}
-    useful_servers = {}
+    servers_and_ip = {}
     meta = {
         "login_users": "DC1\\%s" % cloud.auth['username'],
         "login_groups": "DC1\\ac_devcloud",
@@ -164,41 +157,65 @@ def create(args, cloud):
         # fix needed...
         'disable_pbis': 'true',
     }
+    with open(args.hosts, 'a+b', 0) as fh:
+        for kind, details in topo.items():
+            name = details['name']
+            print("Spawning instance %s, please wait..." % (name))
+            server = cloud.create_server(
+                details['name'], image,
+                flavors[kind], auto_ip=False, wait=True,
+                key_name=args.key_name,
+                availability_zone=details['availability_zone'],
+                meta=meta, userdata=DEF_USERDATA)
+            servers[kind] = server
+            if args.verbose:
+                print("Instance spawn complete:")
+                blob = pprint.pformat(servers[kind])
+                for line in blob.splitlines():
+                    print("  " + line)
+            else:
+                print("Instance spawn complete.")
+            # Rewrite the file...
+            fh.seek(0)
+            fh.truncate()
+            fh.flush()
+            fh.write(utils.prettify_yaml(servers))
+            fh.flush()
+            # Do this after, so that the destroy entrypoint will work/be
+            # able to destroy things even if this happens...
+            server_ip = get_server_ip(server)
+            if not server_ip:
+                raise RuntimeError("Instance %s spawned but no ip"
+                                   " was found associated" % server.name)
+            servers_and_ip[kind] = (server, server_ip)
+    # Validate that we can connect into them.
+    print("Validating connectivity"
+          " using %s threads, please wait..." % SSH_VALIDATION_THREADS)
+    futs = []
+    executor = futures.ThreadPoolExecutor(max_workers=SSH_VALIDATION_THREADS)
+    with executor:
+        for kind, (server, server_ip) in servers_and_ip.items():
+            fut = executor.submit(utils.ssh_connect, server_ip, indent="  ")
+            fut.server = server
+            fut.server_ip = server_ip
+            fut.kind = kind
+            futs.append(fut)
     try:
-        with open(args.hosts, 'a+b', 0) as fh:
-            for kind, details in topo.items():
-                name = details['name']
-                print("Spawning instance %s, please wait..." % (name))
-                server = cloud.create_server(
-                    details['name'], image,
-                    flavors[kind], auto_ip=False, wait=True,
-                    key_name=args.key_name,
-                    availability_zone=details['availability_zone'],
-                    meta=meta, userdata=DEF_USERDATA)
-                servers[kind] = server
-                if args.verbose:
-                    print("Instance spawn complete:")
-                    blob = pprint.pformat(servers[kind])
-                    for line in blob.splitlines():
-                        print("  " + line)
-                else:
-                    print("Instance spawn complete.")
-                # Rewrite the file...
-                fh.seek(0)
-                fh.truncate()
-                fh.flush()
-                fh.write(utils.prettify_yaml(servers))
-                fh.flush()
-                # Do this after, so that the destroy entrypoint will work/be
-                # able to destroy things even if this happens...
-                server_ip = get_server_ip(server)
-                if not server_ip:
-                    raise RuntimeError("Instance %s spawned but no ip"
-                                       " was found associated" % server.name)
-                useful_servers[kind] = (server, server_ip,
-                                        wait_for_ssh(args, server, server_ip))
+        servers = {}
+        for fut in futs:
+            servers[fut.kind] = {
+                'machine': fut.result(),
+                'kind': fut.kind,
+                'server': fut.server,
+                'server_ip': fut.server_ip,
+            }
         # Now turn those into something useful...
-        transform(args, cloud, useful_servers)
+        transform(args, cloud, servers)
     finally:
-        for kind, (server, server_ip, ssh_machine) in useful_servers.items():
-            ssh_machine.close()
+        # Ensure all machines opened (without error) are now closed.
+        while futs:
+            fut = fut.pop()
+            if fut.exception() is not None:
+                continue
+            machine = fut.result()
+            machine.close()
