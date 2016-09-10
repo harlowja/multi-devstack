@@ -93,7 +93,8 @@ def wait_for_ssh(args, server, server_ip):
     """Waits until the servers created can be ssh(ed) into."""
     print("Ensuring %s (at ip %s) is reachable via ssh,"
           " please wait..." % (server.name, server_ip))
-    return utils.ssh_connect(server_ip, verbose=bool(args.verbose))
+    return utils.ssh_connect(server_ip, verbose=bool(args.verbose),
+                             indent="  ")
 
 
 def transform(args, cloud, servers):

@@ -18,7 +18,7 @@ def prettify_yaml(obj):
 
 def ssh_connect(ip, connect_timeout=1.0,
                 max_backoff=32, max_attempts=10,
-                verbose=False, user=None):
+                verbose=False, user=None, indent=""):
     attempt = 1
     connected = False
     machine = None
@@ -31,7 +31,7 @@ def ssh_connect(ip, connect_timeout=1.0,
         except (plumbum.machines.session.SSHCommsChannel2Error,
                 plumbum.machines.session.SSHCommsError, socket.error,
                 paramiko.ssh_exception.AuthenticationException) as e:
-            print("Failed to connect to %s" % (ip))
+            print("%sFailed to connect to %s" % (indent, ip))
             if verbose:
                 traceback.print_exc()
             backoff = min(max_backoff, 2 ** attempt)
@@ -39,9 +39,9 @@ def ssh_connect(ip, connect_timeout=1.0,
             if attempt > max_attempts:
                 raise IOError("Could not connect (over ssh) to"
                               " %s after %i attempts" % (ip, attempt - 1))
-            print("Trying again in %s seconds..." % (backoff))
+            print("%sTrying again in %s seconds..." % (indent, backoff))
             time.sleep(backoff)
         else:
-            print("Ssh connected to %s" % ip)
+            print("%sSsh connected to %s" % (indent, ip))
             connected = True
     return machine
