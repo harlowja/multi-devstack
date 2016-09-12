@@ -285,7 +285,6 @@ def create(args, cloud, tracker):
             servers[fut.kind] = details
         # Now turn those into something useful...
         transform(args, cloud, servers)
-        tracker.mark_end()
     finally:
         # Ensure all machines opened (without error) are now closed.
         while futs:
