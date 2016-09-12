@@ -139,7 +139,7 @@ def transform(args, cloud, servers):
         try:
             with open(args.passwords, "rb") as fh:
                 pass_cfg = ConfigParser()
-                pass_cfg.readfp(fh.read(), filename=fh.name)
+                pass_cfg.readfp(fh, filename=fh.name)
         except IOError as e:
             if e.errno == errno.ENOENT:
                 pass_cfg = ConfigParser()
@@ -175,8 +175,6 @@ def transform(args, cloud, servers):
 
 def create(args, cloud, tracker):
     """Create a new environment."""
-    if tracker.status == utils.Tracker.COMPLETE:
-        tracker.mark_start()
     # Due to some funkiness with our openstack we have to list out
     # the az's and pick one, typically favoring ones with 'cor' in there
     # name.
@@ -227,35 +225,43 @@ def create(args, cloud, tracker):
     blob = pprint.pformat(topo)
     for line in blob.splitlines():
         print("  " + line)
+    # Only create things we have not already created (or that was
+    # destroyed partially...)
     creates = dict((r.server.name, r.server)
                     for r in tracker.search_last_using(
                         lambda r: r.kind == 'server_create'))
     destroys = set(r.name
                    for r in tracker.search_last_using(
                         lambda r: r.kind == 'server_destroy'))
-    servers_and_ip = {}
+    servers = {}
     for kind, details in topo.items():
         name = details['name']
         if name in creates and name not in destroys:
             server = creates[name]
         else:
             print("Spawning instance %s, please wait..." % (name))
+            tracker.record({'kind': 'server_pre_create', 'name': name})
             server = cloud.create_server(
                 details['name'], image,
-                flavors[kind], auto_ip=False, wait=True,
+                flavors[kind], auto_ip=False,
                 key_name=args.key_name,
                 availability_zone=details['availability_zone'],
-                meta=create_meta(cloud), userdata=DEF_USERDATA)
+                meta=create_meta(cloud), userdata=DEF_USERDATA,
+                wait=False)
             tracker.record({'kind': 'server_create', 'server': server})
+            servers[kind] = server
         if args.verbose:
-            print("Instance spawn complete:")
+            print("Instance spawn underway:")
             blob = pprint.pformat(server)
             for line in blob.splitlines():
                 print("  " + line)
         else:
-            print("Instance spawn complete.")
-        # Do this after, so that the destroy entrypoint will work/be
-        # able to destroy things even if this happens...
+            print("Instance spawn underway.")
+    # Wait for them to actually become active...
+    print("Waiting for servers to become active.")
+    servers_and_ip = {}
+    for kind, server in servers.items():
+        server = cloud.wait_for_server(server, auto_ip=False)
         server_ip = get_server_ip(server)
         if not server_ip:
             raise RuntimeError("Instance %s spawned but no ip"

@@ -73,7 +73,7 @@ def main():
             try:
                 cloud = shade.openstack_cloud()
                 print("Action: '%s'" % (args.func.__doc__))
-                print("Tracker: %s" % tracker.path)
+                print("Tracker: '%s'" % tracker.path)
                 print("Cloud: ")
                 blob = pprint.pformat(collections.OrderedDict([
                     ('Authentication url', cloud.auth['auth_url']),

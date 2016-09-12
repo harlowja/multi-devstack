@@ -23,15 +23,10 @@ PASS_CHARS = string.ascii_lowercase + string.digits
 class Tracker(object):
     """Helper for tracking activities (and picking up where we left off)."""
 
-    INCOMPLETE = 'incomplete'
-    COMPLETE = 'complete'
-    UNKNOWN = 'unknown'
-
     def __init__(self, path):
         self._path = path
         self._fh = None
         self._last_block = ()
-        self._status = self.UNKNOWN
 
     def reload(self):
         self._fh.seek(0)
@@ -40,39 +35,9 @@ class Tracker(object):
         for line in contents.splitlines():
             line = line.strip()
             if line:
-                records.append(munch.munchify(json.loads(line)))
-        blocks = []
-        last_block = []
-        start_found = False
-        end_found = True
-        for i, record in enumerate(records):
-            if record.kind == 'start':
-                if not end_found:
-                    raise IOError("Did not find end block"
-                                  " before a new start block at record"
-                                  " %s" % i)
-                last_block = [record]
-                start_found = True
-                end_found = False
-            else:
-                if not start_found:
-                    raise IOError("Did not find start block"
-                                  " before a new record %s" % i)
-                if record.kind == 'end':
-                    blocks.append(last_block)
-                    last_block = []
-                    start_found = False
-                    end_found = True
-                else:
-                    if record.kind != 'user':
-                        raise IOError("Unknown record type at record %s" % i)
-                    else:
-                        last_block.append(record)
-        self._last_block = tuple(last_block)
-        if self._last_block:
-            self._status = self.INCOMPLETE
-        else:
-            self._status = self.COMPLETE
+                r = munch.munchify(json.loads(line))
+                records.append(r.record)
+        self._last_block = tuple(records)
 
     @property
     def last_block(self):
@@ -82,31 +47,40 @@ class Tracker(object):
     def path(self):
         return self._path
 
-    @property
-    def status(self):
-        return self._status
-
     def open(self):
         if self._fh is None:
             self._fh = open(self._path, 'a+')
-            self._status = self.UNKNOWN
 
     def close(self):
         if self._fh is not None:
             self._fh.close()
             self._fh = None
             self._last_block = ()
-            self._status = self.UNKNOWN
+
+    def call_and_mark(self, func, *args, **kwargs):
+        kind = func.__name__
+        matches = self.search_last_using(lambda r: r.kind == kind)
+        if not matches:
+            result = func(*args, **kwargs)
+            self.record({'kind': kind, 'result': result})
+            return result
+        else:
+            raise matches[-1]['result']
 
     def search_last_using(self, matcher):
         matches = []
         for r in self._last_block:
-            if r.kind in ['start', 'end']:
-                continue
-            r = r.record
             if matcher(r):
                 matches.append(r)
         return matches
+
+    def clear(self):
+        if self._fh is None:
+            raise IOError("Can not run 'clear' on a unopened tracker")
+        self._fh.seek(0)
+        self._fh.truncate()
+        self._fh.flush()
+        self.reload()
 
     def _write(self, record):
         record['written_on'] = datetime.now().isoformat()
@@ -114,26 +88,10 @@ class Tracker(object):
         self._fh.write("\n")
         self._fh.flush()
 
-    def mark_start(self):
-        if self._fh is None:
-            raise IOError("Can not add 'start' record on a unopened tracker")
-        if self._status == self.INCOMPLETE:
-            raise IOError("Can not 'start' on an already incomplete tracker")
-        self._write({'kind': 'start'})
-        self.reload()
-
     def record(self, record):
         if self._fh is None:
             raise IOError("Can not add a 'user' record on a unopened tracker")
         self._write({'kind': 'user', 'record': record})
-        self.reload()
-
-    def mark_end(self):
-        if self._status == self.COMPLETE:
-            raise IOError("Can not 'end' on an already complete tracker")
-        if self._fh is None:
-            raise IOError("Can not add a 'end' record on a unopened tracker")
-        self._write({'kind': 'end'})
         self.reload()
 
 
