@@ -14,9 +14,9 @@ def destroy(args, cloud, tracker):
     created_servers = set()
     already_gone = set()
     for r in tracker.last_block:
-        if r['kind'] == 'server_create':
+        if r.kind == 'server_create':
             created_servers.add(r.server.name)
-        if r['kind'] == 'server_destroy':
+        if r.kind == 'server_destroy':
             already_gone.add(r.name)
     servers = created_servers - already_gone
     if not servers:
