@@ -258,9 +258,9 @@ def create(args, cloud, tracker):
         else:
             print("Instance spawn underway.")
     # Wait for them to actually become active...
-    print("Waiting for servers to become active.")
     servers_and_ip = {}
     for kind, server in servers.items():
+        print("Waiting for instance %s to become active." % server.name)
         server = cloud.wait_for_server(server, auto_ip=False)
         server_ip = get_server_ip(server)
         if not server_ip:
