@@ -56,17 +56,6 @@ DEV_FLAVORS = {
 LOG = logging.getLogger(__name__)
 
 
-def make_spawn_matcher(name):
-    def matcher(r):
-        if r.kind != 'server_create':
-            return None
-        s = r.server
-        if s.name == name:
-            return s
-        return None
-    return matcher
-
-
 def bind_subparser(subparsers):
     parser_create = subparsers.add_parser('create')
     parser_create.add_argument("-i", "--image",
@@ -186,139 +175,130 @@ def transform(args, cloud, servers):
 
 def create(args, cloud, tracker):
     """Create a new environment."""
-    with open(args.hosts, 'a+') as hosts_handle:
-        if tracker.status == utils.Tracker.COMPLETE:
-            tracker.mark_start()
-        hosts_handle.seek(0)
-        # Due to some funkiness with our openstack we have to list out
-        # the az's and pick one, typically favoring ones with 'cor' in there
-        # name.
-        nc = cloud.nova_client
-        # TODO(harlowja): why can't we list details?
-        azs = [az.zoneName
-               for az in nc.availability_zones.list(detailed=False)]
-        if args.availability_zone:
-            if args.availability_zone not in azs:
-                raise RuntimeError(
-                    "Can not create instances in unknown"
-                    " availability zone '%s'" % args.availability_zone)
-            az = args.availability_zone
+    if tracker.status == utils.Tracker.COMPLETE:
+        tracker.mark_start()
+    # Due to some funkiness with our openstack we have to list out
+    # the az's and pick one, typically favoring ones with 'cor' in there
+    # name.
+    nc = cloud.nova_client
+    # TODO(harlowja): why can't we list details?
+    azs = [az.zoneName
+           for az in nc.availability_zones.list(detailed=False)]
+    if args.availability_zone:
+        if args.availability_zone not in azs:
+            raise RuntimeError(
+                "Can not create instances in unknown"
+                " availability zone '%s'" % args.availability_zone)
+        az = args.availability_zone
+    else:
+        azs = sorted(azs, cmp=az_sorter, reverse=True)
+        az = azs[0]
+    if args.image:
+        image = cloud.get_image(args.image)
+        if not image:
+            raise RuntimeError("Can not create instances with unknown"
+                               " source image '%s'" % args.image)
+    else:
+        image = find_cent7_image(cloud)
+        if not image:
+            raise RuntimeError("Can not create instances (unable to"
+                               " locate a cent7.x source image)")
+    flavors = {}
+    for kind, kind_flv in DEV_FLAVORS.items():
+        flv = cloud.get_flavor(kind_flv)
+        if not flv:
+            raise RuntimeError("Can not create '%s' instances without"
+                               " matching flavor '%s'" % (kind, kind_flv))
+        flavors[kind] = flv
+    print("Spawning the following instances in availability zone: %s" % az)
+    topo = {}
+    for kind, name_tpl in DEV_TOPO:
+        tpl_vals = {
+            'user': cloud.auth['username'],
+            'rand': random.randrange(1, 99),
+        }
+        name = name_tpl % tpl_vals
+        topo[kind] = {
+            'name': name,
+            'flavor': flavors[kind].name,
+            'image': image.name,
+            'availability_zone': az,
+        }
+    blob = pprint.pformat(topo)
+    for line in blob.splitlines():
+        print("  " + line)
+    creates = dict((r.server.name, r.server)
+                    for r in tracker.search_last_using(
+                        lambda r: r.kind == 'server_create'))
+    destroys = set(r.name
+                   for r in tracker.search_last_using(
+                        lambda r: r.kind == 'server_destroy'))
+    servers_and_ip = {}
+    for kind, details in topo.items():
+        name = details['name']
+        if name in creates and name not in destroys:
+            server = creates[name]
         else:
-            azs = sorted(azs, cmp=az_sorter, reverse=True)
-            az = azs[0]
-        if args.image:
-            image = cloud.get_image(args.image)
-            if not image:
-                raise RuntimeError("Can not create instances with unknown"
-                                   " source image '%s'" % args.image)
+            print("Spawning instance %s, please wait..." % (name))
+            server = cloud.create_server(
+                details['name'], image,
+                flavors[kind], auto_ip=False, wait=True,
+                key_name=args.key_name,
+                availability_zone=details['availability_zone'],
+                meta=create_meta(cloud), userdata=DEF_USERDATA)
+            tracker.record({'kind': 'server_create', 'server': server})
+        if args.verbose:
+            print("Instance spawn complete:")
+            blob = pprint.pformat(server)
+            for line in blob.splitlines():
+                print("  " + line)
         else:
-            image = find_cent7_image(cloud)
-            if not image:
-                raise RuntimeError("Can not create instances (unable to"
-                                   " locate a cent7.x source image)")
-        flavors = {}
-        for kind, kind_flv in DEV_FLAVORS.items():
-            flv = cloud.get_flavor(kind_flv)
-            if not flv:
-                raise RuntimeError("Can not create '%s' instances without"
-                                   " matching flavor '%s'" % (kind, kind_flv))
-            flavors[kind] = flv
-        print("Spawning the following instances in availability zone: %s" % az)
-        topo = {}
-        for kind, name_tpl in DEV_TOPO:
-            tpl_vals = {
-                'user': cloud.auth['username'],
-                'rand': random.randrange(1, 99),
+            print("Instance spawn complete.")
+        # Do this after, so that the destroy entrypoint will work/be
+        # able to destroy things even if this happens...
+        server_ip = get_server_ip(server)
+        if not server_ip:
+            raise RuntimeError("Instance %s spawned but no ip"
+                               " was found associated" % server.name)
+        servers_and_ip[kind] = (server, server_ip)
+    # Validate that we can connect into them.
+    print("Validating connectivity using %s threads,"
+          " please wait..." % THREAD_POOL_SIZES.ssh_validation)
+    futs = []
+    with futures.ThreadPoolExecutor(
+        max_workers=THREAD_POOL_SIZES.ssh_validation) as executor:
+        for kind, (server, server_ip) in servers_and_ip.items():
+            fut = executor.submit(utils.ssh_connect,
+                                  server_ip, indent="  ")
+            fut.details = {
+                'server': server,
+                'server_ip': server_ip,
             }
-            name = name_tpl % tpl_vals
-            topo[kind] = {
-                'name': name,
-                'flavor': flavors[kind].name,
-                'image': image.name,
-                'availability_zone': az,
-            }
-        blob = pprint.pformat(topo)
-        for line in blob.splitlines():
-            print("  " + line)
+            fut.kind = kind
+            futs.append(fut)
+    try:
+        # Reform with the futures results...
         servers = {}
-        servers_and_ip = {}
-        for kind, details in topo.items():
-            name = details['name']
-            server = tracker.search_last_using(
-                make_spawn_matcher(name),
-                record_converter=munch.Munch.fromDict)
-            if not server:
-                print("Spawning instance %s, please wait..." % (name))
-                server = cloud.create_server(
-                    details['name'], image,
-                    flavors[kind], auto_ip=False, wait=True,
-                    key_name=args.key_name,
-                    availability_zone=details['availability_zone'],
-                    meta=create_meta(cloud), userdata=DEF_USERDATA)
-                tracker.record({'kind': 'server_create',
-                                'server': server})
-            servers[kind] = server
-            if args.verbose:
-                print("Instance spawn complete:")
-                blob = pprint.pformat(servers[kind])
-                for line in blob.splitlines():
-                    print("  " + line)
+        for fut in futs:
+            details = dict(fut.details)
+            details['machine'] = fut.result()
+            servers[fut.kind] = details
+        # Now turn those into something useful...
+        transform(args, cloud, servers)
+        tracker.mark_end()
+    finally:
+        # Ensure all machines opened (without error) are now closed.
+        while futs:
+            fut = futs.pop()
+            try:
+                machine = fut.result()
+            except Exception:
+                pass
             else:
-                print("Instance spawn complete.")
-            # Rewrite the file...
-            hosts_handle.seek(0)
-            hosts_handle.truncate()
-            hosts_handle.flush()
-            hosts_handle.write(utils.prettify_yaml(servers))
-            hosts_handle.flush()
-            # Do this after, so that the destroy entrypoint will work/be
-            # able to destroy things even if this happens...
-            server_ip = get_server_ip(server)
-            if not server_ip:
-                raise RuntimeError("Instance %s spawned but no ip"
-                                   " was found associated" % server.name)
-            servers_and_ip[kind] = (server, server_ip)
-        # No longer needed (so close it out).
-        hosts_handle.close()
-        hosts_handle = None
-        # Validate that we can connect into them.
-        print("Validating connectivity using %s threads,"
-              " please wait..." % THREAD_POOL_SIZES.ssh_validation)
-        futs = []
-        with futures.ThreadPoolExecutor(
-            max_workers=THREAD_POOL_SIZES.ssh_validation) as executor:
-            for kind, (server, server_ip) in servers_and_ip.items():
-                fut = executor.submit(utils.ssh_connect,
-                                      server_ip, indent="  ")
-                fut.details = {
-                    'server': server,
-                    'server_ip': server_ip,
-                }
-                fut.kind = kind
-                futs.append(fut)
-        try:
-            # Reform with the futures results...
-            servers = {}
-            for fut in futs:
-                details = dict(fut.details)
-                details['machine'] = fut.result()
-                servers[fut.kind] = details
-            # Now turn those into something useful...
-            transform(args, cloud, servers)
-            tracker.mark_end()
-        finally:
-            # Ensure all machines opened (without error) are now closed.
-            while futs:
-                fut = futs.pop()
                 try:
-                    machine = fut.result()
+                    machine.close()
                 except Exception:
-                    pass
-                else:
-                    try:
-                        machine.close()
-                    except Exception:
-                        LOG.exception("Failed closing ssh machine opened"
-                                      " to server %s at %s",
-                                      fut.details['server'].name,
-                                      fut.details['server_ip'])
+                    LOG.exception("Failed closing ssh machine opened"
+                                  " to server %s at %s",
+                                  fut.details['server'].name,
+                                  fut.details['server_ip'])

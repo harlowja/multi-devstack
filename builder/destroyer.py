@@ -11,23 +11,24 @@ def bind_subparser(subparsers):
 
 def destroy(args, cloud, tracker):
     """Destroy a previously built environment."""
-    with open(args.hosts, 'r+b', 0) as fh:
-        servers = yaml.load(fh.read())
-        if not servers:
-            print("Nothing to destroy.")
-        else:
-            while servers:
-                kind, server = servers.popitem()
-                print("Destroying server %s, please wait..." % server.name)
-                cloud.delete_server(server.name, wait=True)
-                # Rewrite the file...
-                fh.seek(0)
-                fh.truncate()
-                fh.flush()
-                fh.write(utils.prettify_yaml(servers))
-                fh.flush()
-        # TODO(harlowja): we should be able to remove individual creates,
-        # but for now this will be the crappy way of closing off the
-        # previously unfinished business.
-        if tracker.status == utils.Tracker.INCOMPLETE:
-            tracker.mark_end()
+    created_servers = set()
+    already_gone = set()
+    for r in tracker.last_block:
+        if r['kind'] == 'server_create':
+            created_servers.add(r.server.name)
+        if r['kind'] == 'server_destroy':
+            already_gone.add(r.name)
+    servers = created_servers - already_gone
+    if not servers:
+        print("Nothing to destroy.")
+    else:
+        while servers:
+            server = servers.pop()
+            print("Destroying server %s, please wait..." % server)
+            cloud.delete_server(server, wait=True)
+            tracker.record({'kind': 'server_destroy', 'name': server})
+    # TODO(harlowja): we should be able to remove individual creates,
+    # but for now this will be the crappy way of closing off the
+    # previously unfinished business.
+    if tracker.status == utils.Tracker.INCOMPLETE:
+        tracker.mark_end()

@@ -27,11 +27,6 @@ TRACE = 5
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--hosts",
-                        help="file to read/write host"
-                             " information into/from (default=%(default)s)",
-                        default=os.path.join(os.getcwd(), "hosts.yaml"),
-                        metavar="PATH")
     parser.add_argument("--passwords",
                         help="file to read/write password"
                              " information into/from (default=%(default)s)",
@@ -74,6 +69,7 @@ def main():
         try:
             tracker = utils.Tracker(args.tracker)
             tracker.open()
+            tracker.reload()
             try:
                 cloud = shade.openstack_cloud()
                 print("Action: '%s'" % (args.func.__doc__))

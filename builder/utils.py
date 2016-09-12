@@ -7,6 +7,7 @@ import json
 
 import jinja2
 from jinja2 import Template
+import munch
 
 from monotonic import monotonic as now
 from paramiko.common import DEBUG
@@ -23,31 +24,28 @@ class Tracker(object):
 
     INCOMPLETE = 'incomplete'
     COMPLETE = 'complete'
+    UNKNOWN = 'unknown'
 
-    def __init__(self, path, opener=open):
+    def __init__(self, path):
         self._path = path
         self._fh = None
-        self._last_block = []
-        self._blocks = []
-        self._opener = opener
-        self._status = self.COMPLETE
+        self._last_block = ()
+        self._status = self.UNKNOWN
 
     def reload(self):
         self._fh.seek(0)
-        self._last_block = []
-        self._blocks = []
         records = []
         contents = self._fh.read()
         for line in contents.splitlines():
             line = line.strip()
             if line:
-                records.append(json.loads(line))
-        full_blocks = []
+                records.append(munch.munchify(json.loads(line)))
+        blocks = []
         last_block = []
         start_found = False
         end_found = True
         for i, record in enumerate(records):
-            if record['kind'] == 'start':
+            if record.kind == 'start':
                 if not end_found:
                     raise IOError("Did not find end block"
                                   " before a new start block at record"
@@ -59,20 +57,25 @@ class Tracker(object):
                 if not start_found:
                     raise IOError("Did not find start block"
                                   " before a new record %s" % i)
-                else:
-                    last_block.append(record)
-                if record['kind'] == 'end':
-                    full_blocks.append(last_block)
+                if record.kind == 'end':
+                    blocks.append(last_block)
                     last_block = []
                     start_found = False
                     end_found = True
-        self._last_block = last_block
-        self._blocks = full_blocks
-        self._blocks.append(last_block)
+                else:
+                    if record.kind != 'user':
+                        raise IOError("Unknown record type at record %s" % i)
+                    else:
+                        last_block.append(record)
+        self._last_block = tuple(last_block)
         if self._last_block:
             self._status = self.INCOMPLETE
         else:
             self._status = self.COMPLETE
+
+    @property
+    def last_block(self):
+        return self._last_block
 
     @property
     def path(self):
@@ -84,29 +87,28 @@ class Tracker(object):
 
     def open(self):
         if self._fh is None:
-            self._fh = self._opener(self._path, 'a+')
-        self.reload()
+            self._fh = open(self._path, 'a+')
+            self._status = self.UNKNOWN
 
     def close(self):
         if self._fh is not None:
             self._fh.close()
             self._fh = None
-            self._last_block = []
+            self._last_block = ()
+            self._status = self.UNKNOWN
 
-    def search_last_using(self, matcher, record_converter=None):
+    def search_last_using(self, matcher):
+        matches = []
         for r in self._last_block:
-            if r['kind'] in ['start', 'end']:
+            if r.kind in ['start', 'end']:
                 continue
-            r = r['record']
-            if record_converter is not None:
-                r = record_converter(r)
-            r = matcher(r)
-            if r is not None:
-                return r
-        return None
+            r = r.record
+            if matcher(r):
+                matches.append(r)
+        return matches
 
     def _write(self, record):
-        self._fh.write(json.dumps(record))
+        self._fh.write(json.dumps(munch.unmunchify(record)))
         self._fh.write("\n")
         self._fh.flush()
 
