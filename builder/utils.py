@@ -1,4 +1,5 @@
 from binascii import hexlify
+from datetime import datetime
 import random
 import socket
 import string
@@ -108,6 +109,7 @@ class Tracker(object):
         return matches
 
     def _write(self, record):
+        record['written_on'] = datetime.now().isoformat()
         self._fh.write(json.dumps(munch.unmunchify(record)))
         self._fh.write("\n")
         self._fh.flush()
