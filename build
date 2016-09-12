@@ -5,16 +5,24 @@ A wonderful magically tool to build a development
 environment for you (out of virtual machines).
 """
 
-import collections
-import os
-import argparse
-import logging
+from __future__ import print_function
 
+import argparse
+import collections
+import hashlib
+import logging
+import os
+import sys
+
+import fasteners
 import shade
 
 from builder import creator
 from builder import destroyer
 from builder import pprint
+from builder import utils
+
+TRACE = 5
 
 
 def main():
@@ -24,30 +32,24 @@ def main():
                              " information into/from (default=%(default)s)",
                         default=os.path.join(os.getcwd(), "hosts.yaml"),
                         metavar="PATH")
+    parser.add_argument("--passwords",
+                        help="file to read/write password"
+                             " information into/from (default=%(default)s)",
+                        default=os.path.join(os.getcwd(), "passwords.yaml"),
+                        metavar="PATH")
+    parser.add_argument("--tracker",
+                        help="file to read/write action tracking"
+                             " information into/from (default=%(default)s)",
+                        default=os.path.join(os.getcwd(), "actions.log"),
+                        metavar="PATH")
     parser.add_argument("-v", "--verbose",
                         help=("run in verbose mode (may be specified more"
                               " than once to increase the verbosity)"),
                         action='count', default=0)
 
     subparsers = parser.add_subparsers(help='sub-command help')
-    parser_destroy = subparsers.add_parser('destroy')
-    parser_destroy.set_defaults(func=destroyer.destroy)
-
-    parser_create = subparsers.add_parser('create')
-    parser_create.add_argument("-i", "--image",
-                               help="cent7.x image name to"
-                                    " use (if not provided one will"
-                                    " automatically be found)",
-                               default=None)
-    parser_create.add_argument("-a", "--availability-zone",
-                               help="explicit availability"
-                                    " to use (if not provided one will"
-                                    " automatically be picked at random)",
-                               default=None)
-    parser_create.add_argument("-k", "--key-name",
-                               help="key name to use when creating"
-                                    " instances", required=True)
-    parser_create.set_defaults(func=creator.create)
+    destroyer.bind_subparser(subparsers)
+    creator.bind_subparser(subparsers)
 
     args = parser.parse_args()
     if args.verbose == 1:
@@ -55,23 +57,41 @@ def main():
     elif args.verbose == 2:
         logging.basicConfig(level=logging.DEBUG)
     elif args.verbose > 2:
-        # Not officially used, but typically supported.
-        logging.basicConfig(level=5)
+        # Not officially a level, but typically supported (by some projects,
+        # oslo.log, taskflow, and various other python libraries).
+        logging.basicConfig(level=TRACE)
     else:
+        # No options provided...
         logging.basicConfig(level=logging.WARN)
 
-    cloud = shade.openstack_cloud()
-    print("Action: '%s'" % (args.func.__doc__))
-    print("Cloud: ")
-    blob = pprint.pformat(collections.OrderedDict([
-        ('Authentication url', cloud.auth['auth_url']),
-        ('Authentication token', cloud.auth_token),
-        ('User', cloud.auth['username']),
-        ('Project', cloud.auth['project_name']),
-    ]))
-    for line in blob.splitlines():
-        print("  " + line)
-    args.func(args, cloud)
+    one_at_a_time = fasteners.InterProcessLock(".run_lock")
+    gotten = one_at_a_time.acquire(blocking=False)
+    if not gotten:
+        print("Only one instance of this application can run"
+              " at the same time.", file=sys.stderr)
+        sys.exit(1)
+    else:
+        try:
+            tracker = utils.Tracker(args.tracker)
+            tracker.open()
+            try:
+                cloud = shade.openstack_cloud()
+                print("Action: '%s'" % (args.func.__doc__))
+                print("Tracker: %s" % tracker.path)
+                print("Cloud: ")
+                blob = pprint.pformat(collections.OrderedDict([
+                    ('Authentication url', cloud.auth['auth_url']),
+                    ('Authentication token', cloud.auth_token),
+                    ('User', cloud.auth['username']),
+                    ('Project', cloud.auth['project_name']),
+                ]))
+                for line in blob.splitlines():
+                    print("  " + line)
+                args.func(args, cloud, tracker)
+            finally:
+                tracker.close()
+        finally:
+            one_at_a_time.release()
 
 
 if __name__ == '__main__':

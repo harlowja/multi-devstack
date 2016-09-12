@@ -1,7 +1,9 @@
 plumbum
 shade
-iniparse
 yaml
 paramiko
 monotonic
 futures
+fasteners
+jinja2
+iniparse
