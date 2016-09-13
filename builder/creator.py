@@ -192,26 +192,18 @@ def run_stack(args, cloud, tracker, servers):
         else:
             details = servers[kind]
             stack_cmd = details['machine']['/home/stack/devstack/stack.sh']
-            if args.verbose:
-                print("  Running stack.sh on server %s" % details['server'].name)
-                for stdout, stderr in stack_cmd.popen().iter_lines():
-                    if stdout:
-                        print(stdout, file=sys.stdout)
-                    if stderr:
-                        print(stderr, file=sys.stderr)
-            else:
-                print("  Running stack.sh on server %s" % details['server'].name)
-                with open(os.path.join(output_dir, "%s.stderr" % details['server'].name), 'wb') as stderr_fh:
-                    with open(os.path.join(output_dir, "%s.stdout" % details['server'].name), 'wb') as stdout_fh:
-                        print("    Output file (stderr): %s" % stderr_fh.name)
-                        print("    Output file (stdout): %s" % stdout_fh.name)
-                        for stdout, stderr in stack_cmd.popen().iter_lines():
-                            if stdout:
-                                print(stdout, file=stdout_fh)
-                                stdout_fh.flush()
-                            if stderr:
-                                print(stderr, file=stderr_fh)
-                                stderr_fh.flush()
+            print("  Running stack.sh on server %s" % details['server'].name)
+            with open(os.path.join(output_dir, "%s.stderr" % details['server'].name), 'wb') as stderr_fh:
+                with open(os.path.join(output_dir, "%s.stdout" % details['server'].name), 'wb') as stdout_fh:
+                    print("    Output file (stderr): %s" % stderr_fh.name)
+                    print("    Output file (stdout): %s" % stdout_fh.name)
+                    for stdout, stderr in stack_cmd.popen().iter_lines():
+                        if stdout:
+                            print(stdout, file=stdout_fh)
+                            stdout_fh.flush()
+                        if stderr:
+                            print(stderr, file=stderr_fh)
+                            stderr_fh.flush()
 
 
 def create_local_files(args, cloud, servers, pass_cfg):
