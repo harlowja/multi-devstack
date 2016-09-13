@@ -253,7 +253,7 @@ def create(args, cloud, tracker):
     pre_creates = dict((r.server_kind, r.server_details)
                         for r in tracker.search_last_using(
                             lambda r: r.kind == 'server_pre_create'))
-    with open(os.path.join("templates", "ud.tpl", "rb") as fh:
+    with open(os.path.join("templates", "ud.tpl"), "rb") as fh:
         ud = utils.render_tpl(fh.read(), {})
     for kind, name_tpl in DEV_TOPO:
         if kind not in pre_creates:
