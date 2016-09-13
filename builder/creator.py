@@ -1,6 +1,9 @@
 import errno
 import logging
+import os
 import random
+import tempfile
+import sys
 
 from concurrent import futures
 from distutils.version import LooseVersion
@@ -12,45 +15,58 @@ import munch
 from builder import pprint
 from builder import utils
 
-THREAD_POOL_SIZES = munch.Munch({
-    'ssh_validation': 2,
-})
-DEF_USER = 'stack'
-DEF_USERDATA = """#!/bin/bash
+DEF_PASSES = [
+    'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
+    'RABBIT_PASSWORD',
+]
+DEF_BRANCH = "stable/liberty"
+DEF_USERDATA_TPL = """#!/bin/bash
 set -x
 
 # Install some common things...
-yum install git nano -y
+yum install -y git nano
+yum install -y python-devel
+yum install -y libffi-devel openssl-devel mysql-devel \
+               postgresql-devel libxml2-devel libxslt-devel openldap-devel
+
+%(extra_packs)s
+
+# Seems needed as a fix to avoid devstack later breaking...
+touch /etc/sysconfig/iptables
 
 # Creat the user we want...
-tobe_user=%(USER)s
+tobe_user=stack
+tobe_user_pw=stack
 id -u $tobe_user &>/dev/null
 if [ $? -ne 0 ]; then
-    useradd $tobe_user --groups root --gid 0 -m -s /bin/bash -d "/home/$tobe_user"
+    useradd "$tobe_user" --groups root --gid 0 -m -s /bin/bash -d "/home/$tobe_user"
 fi
+echo "$tobe_user_pw" | passwd --stdin "$tobe_user"
 
-cat > /etc/sudoers.d/99-%(USER)s << EOF
+cat > /etc/sudoers.d/99-$tobe_user << EOF
 # Automatically generated at slave creation time.
 # Do not edit.
 $tobe_user ALL=(ALL) NOPASSWD:ALL
 EOF
-
-# Get devstack ready to go...
-git clone git://git.openstack.org/openstack-dev/devstack /home/%(USER)s/devstack
-chown -R %(USER)s /home/%(USER)s
-""" % {'USER': DEF_USER}
+"""
+DEV_PW = {
+    # We can't seem to alter this one more than once,
+    # so just leave it as is... todo fix this and make it so that
+    # we reset it...
+    'DATABASE_PASSWORD': 'stack',
+}
 DEV_TOPO = tuple([
     ('cap', '%(user)s-cap-%(rand)s'),
     ('map', '%(user)s-map-%(rand)s'),
-    ('top-rb', '%(user)s-trb-%(rand)s'),
-    ('bottom-rb', '%(user)s-brb-%(rand)s'),
+    ('top_rb', '%(user)s-trb-%(rand)s'),
+    ('bottom_rb', '%(user)s-brb-%(rand)s'),
     ('hv', '%(user)s-hv-%(rand)s'),
 ])
 DEV_FLAVORS = {
     'cap': 'm1.medium',
     'map': 'm1.medium',
-    'top-rb': 'm1.medium',
-    'bottom-rb': 'm1.medium',
+    'top_rb': 'm1.medium',
+    'bottom_rb': 'm1.medium',
     'hv': 'm1.large',
 }
 LOG = logging.getLogger(__name__)
@@ -71,7 +87,10 @@ def bind_subparser(subparsers):
     parser_create.add_argument("-k", "--key-name",
                                help="key name to use when creating"
                                     " instances (required for key-based"
-                                    " authentication)", required=True)
+                                    " authentication)")
+    parser_create.add_argument("-b", "--branch",
+                               help="devstack branch (default=%(default)s)",
+                               default="stable/liberty")
     parser_create.set_defaults(func=create)
     return parser_create
 
@@ -132,7 +151,44 @@ def az_sorter(az1, az2):
         return 0
 
 
-def transform(args, cloud, servers):
+def checkout_devstack_branch(args, cloud, servers):
+    results = {}
+    for kind, details in servers.items():
+        cmd = "cd devstack && git checkout %s" % DEF_BRANCH
+        stdout, stderr = utils.run_and_check(details['machine'],
+                                             details['server'], cmd)
+        results[kind] = (stdout, stderr)
+    return results
+
+
+def clone_devstack(args, cloud, servers):
+    for kind, details in servers.items():
+        sys.stdout.write("  Cloning devstack in server %s " % details['server'].name)
+        sys.stdout.flush()
+        cmd = "rm -rf devstack"
+        stdout, stderr = utils.run_and_check(details['machine'],
+                                             details['server'], cmd)
+        cmd = "git clone git://git.openstack.org/openstack-dev/devstack"
+        stdout, stderr = utils.run_and_check(details['machine'],
+                                             details['server'], cmd)
+        sys.stdout.write("(OK) \n")
+
+
+def create_local_files(args, cloud, servers, pass_cfg):
+    params = DEV_PW.copy()
+    for pw_name in DEF_PASSES:
+        params[pw_name] = pass_cfg.get("passwords", pw_name)
+    for kind, details in servers.items():
+        local_tpl_pth = os.path.join("templates", "local.%s.tpl" % kind)
+        mach = details['machine']
+        with open(local_tpl_pth, 'rb') as fh:
+            with tempfile.NamedTemporaryFile() as t_fh:
+                t_fh.write(utils.render_tpl(fh.read(), params))
+                t_fh.flush()
+                mach.upload(t_fh.name, "/home/stack/devstack/local.conf")
+
+
+def transform(args, cloud, tracker, servers):
     """Turn (mostly) raw servers into useful things."""
     # Ensure all needed (to-be-used) passwords exist and have a value.
     if args.passwords:
@@ -151,9 +207,7 @@ def transform(args, cloud, servers):
     if not pass_cfg.has_section('passwords'):
         pass_cfg.add_section('passwords')
         needs_write = True
-    for pw_name in ['ADMIN_PASSWORD', 'DATABASE_PASSWORD',
-                    'RABBIT_PASSWORD', 'SERVICE_PASSWORD',
-                    'SERVICE_TOKEN']:
+    for pw_name in DEF_PASSES:
         if pass_cfg.has_option("passwords", pw_name):
             pw = pass_cfg.get("passwords", pw_name)
             if pw:
@@ -164,13 +218,12 @@ def transform(args, cloud, servers):
         with open(args.passwords, "wb") as fh:
             pass_cfg.write(fh)
         needs_write = False
-    # Adjust devstack (previously checked out) to be the desired branch.
-    for kind, details in servers.items():
-        pass
-    # Setup the map servers first (as keystone will reside here, and it
-    # must be in a working state before other services can turn on).
-    details = servers['map']
-    
+    tracker.call_and_mark(clone_devstack,
+                          args, cloud, servers)
+    tracker.call_and_mark(checkout_devstack_branch,
+                          args, cloud, servers)
+    tracker.call_and_mark(create_local_files,
+                          args, cloud, servers, pass_cfg)
 
 
 def create(args, cloud, tracker):
@@ -210,19 +263,49 @@ def create(args, cloud, tracker):
         flavors[kind] = flv
     print("Spawning the following instances in availability zone: %s" % az)
     topo = {}
+    pretty_topo = {}
+    # We may have already created it (aka, underway so use them if
+    # we have done that).
+    pre_creates = dict((r.server_kind, r.server_details)
+                        for r in tracker.search_last_using(
+                            lambda r: r.kind == 'server_pre_create'))
     for kind, name_tpl in DEV_TOPO:
-        tpl_vals = {
-            'user': cloud.auth['username'],
-            'rand': random.randrange(1, 99),
-        }
-        name = name_tpl % tpl_vals
-        topo[kind] = {
-            'name': name,
-            'flavor': flavors[kind].name,
-            'image': image.name,
-            'availability_zone': az,
-        }
-    blob = pprint.pformat(topo)
+        if kind not in pre_creates:
+            name_tpl_vals = {
+                'user': cloud.auth['username'],
+                'rand': random.randrange(1, 99),
+            }
+            ud_tpl_vals = {
+                'extra_packs': utils.read_file(
+                    os.path.join("templates", "packs.%s" % kind)),
+            }
+            ud = DEF_USERDATA_TPL % ud_tpl_vals
+            name = name_tpl % name_tpl_vals
+            topo[kind] = {
+                'name': name,
+                'flavor': flavors[kind],
+                'image': image,
+                'availability_zone': az,
+                'user_data': ud,
+            }
+            pretty_topo[kind] = {
+                'name': name,
+                'flavor': flavors[kind].name,
+                'image': image.name,
+                'availability_zone': az,
+            }
+            tracker.record({'kind': 'server_pre_create',
+                            'server_kind': kind,
+                            'name': name, 'server_details': topo[kind]})
+        else:
+            topo[kind] = pre_creates[kind]
+            pretty_topo[kind] = {
+                'name': topo[kind]['name'],
+                'flavor': topo[kind].flavor.name,
+                'image': topo[kind].image.name,
+                'availability_zone': topo[kind].availability_zone,
+            }
+    blob = pprint.pformat(pretty_topo)
     for line in blob.splitlines():
         print("  " + line)
     # Only create things we have not already created (or that was
@@ -238,30 +321,34 @@ def create(args, cloud, tracker):
         name = details['name']
         if name in creates and name not in destroys:
             server = creates[name]
+            servers[kind] = server
         else:
             print("Spawning instance %s, please wait..." % (name))
-            tracker.record({'kind': 'server_pre_create', 'name': name})
             server = cloud.create_server(
-                details['name'], image,
-                flavors[kind], auto_ip=False,
+                details['name'], details['image'],
+                details['flavor'], auto_ip=False,
                 key_name=args.key_name,
                 availability_zone=details['availability_zone'],
-                meta=create_meta(cloud), userdata=DEF_USERDATA,
+                meta=create_meta(cloud), userdata=details['user_data'],
                 wait=False)
-            tracker.record({'kind': 'server_create', 'server': server})
+            tracker.record({'kind': 'server_create',
+                            'server': server, 'server_kind': kind})
             servers[kind] = server
-        if args.verbose:
-            print("Instance spawn underway:")
-            blob = pprint.pformat(server)
-            for line in blob.splitlines():
-                print("  " + line)
-        else:
-            print("Instance spawn underway.")
+            if args.verbose:
+                print("Instance spawn underway:")
+                blob = pprint.pformat(server)
+                for line in blob.splitlines():
+                    print("  " + line)
+            else:
+                print("Instance spawn underway.")
     # Wait for them to actually become active...
     servers_and_ip = {}
+    print("Waiting for instances to become ACTIVE, please wait...")
     for kind, server in servers.items():
-        print("Waiting for instance %s to become active." % server.name)
+        sys.stdout.write("  Waiting for instance %s " % server.name)
+        sys.stdout.flush()
         server = cloud.wait_for_server(server, auto_ip=False)
+        sys.stdout.write("(OK)\n")
         server_ip = get_server_ip(server)
         if not server_ip:
             raise RuntimeError("Instance %s spawned but no ip"
@@ -269,13 +356,14 @@ def create(args, cloud, tracker):
         servers_and_ip[kind] = (server, server_ip)
     # Validate that we can connect into them.
     print("Validating connectivity using %s threads,"
-          " please wait..." % THREAD_POOL_SIZES.ssh_validation)
+          " please wait..." % len(servers_and_ip))
     futs = []
-    with futures.ThreadPoolExecutor(
-        max_workers=THREAD_POOL_SIZES.ssh_validation) as executor:
+    with futures.ThreadPoolExecutor(max_workers=len(servers_and_ip)) as ex:
         for kind, (server, server_ip) in servers_and_ip.items():
-            fut = executor.submit(utils.ssh_connect,
-                                  server_ip, indent="  ")
+            fut = ex.submit(utils.ssh_connect,
+                            server_ip, indent="  ",
+                            user='stack', password='stack',
+                            server_name=server.name)
             fut.details = {
                 'server': server,
                 'server_ip': server_ip,
@@ -290,7 +378,7 @@ def create(args, cloud, tracker):
             details['machine'] = fut.result()
             servers[fut.kind] = details
         # Now turn those into something useful...
-        transform(args, cloud, servers)
+        transform(args, cloud, tracker, servers)
     finally:
         # Ensure all machines opened (without error) are now closed.
         while futs:
