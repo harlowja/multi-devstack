@@ -5,7 +5,6 @@ import logging
 import os
 import random
 import sys
-import tempfile
 
 from concurrent import futures
 from distutils.version import LooseVersion
@@ -169,7 +168,7 @@ def clone_devstack(args, cloud, servers):
 
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
-    output_dir = utils.safe_make_dir(args.output_dir)
+    utils.safe_make_dir(args.scratch_dir)
     # Order matters here.
     for kind in ['map']:
         instance = servers[kind]
@@ -181,7 +180,7 @@ def run_stack(args, cloud, tracker, servers):
 
 def create_local_files(args, cloud, servers, pass_cfg):
     """Creates and uploads all local.conf files for devstack."""
-    output_dir = utils.safe_make_dir(args.output_dir)
+    utils.safe_make_dir(args.scratch_dir)
     params = dict(DEFAULT_PASSWORDS)
     for pw_name in DEF_PASSES:
         params[pw_name] = pass_cfg.get("passwords", pw_name)
