@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import errno
 import logging
 import os
@@ -15,6 +17,7 @@ import munch
 from builder import pprint
 from builder import utils
 
+OUTPUT_DIR = "output"
 DEF_PASSES = [
     'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
     'RABBIT_PASSWORD',
@@ -174,6 +177,41 @@ def clone_devstack(args, cloud, servers):
         sys.stdout.write("(OK) \n")
 
 
+def run_stack(args, cloud, tracker, servers):
+    # Order matters here.
+    matches = tracker.search_last_using(lambda r: r.kind == "stacked")
+    already_done = set(r.server_kind for r in matches)
+    # TODO(harlowja): make this an argument?
+    if not os.path.isdir(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+    for kind in ['map']:
+        if kind in already_done:
+            continue
+        else:
+            details = servers[kind]
+            stack_cmd = details['machine']['/home/stack/devstack/stack.sh']
+            if args.verbose:
+                print("  Running stack.sh on server %s" % details['server'].name)
+                for stdout, stderr in stack_cmd.popen().iter_lines():
+                    if stdout:
+                        print(stdout, file=sys.stdout)
+                    if stderr:
+                        print(stderr, file=sys.stderr)
+            else:
+                print("  Running stack.sh on server %s" % details['server'].name)
+                with open(os.path.join(OUTPUT_DIR, "%s.stderr" % details['server'].name), 'wb') as stderr_fh:
+                    with open(os.path.join(OUTPUT_DIR, "%s.stdout" % details['server'].name), 'wb') as stdout_fh:
+                        print("    Output file (stderr): %s" % stderr_fh.name)
+                        print("    Output file (stdout): %s" % stdout_fh.name)
+                        for stdout, stderr in stack_cmd.popen().iter_lines():
+                            if stdout:
+                                print(stdout, file=stdout_fh)
+                                stdout_fh.flush()
+                            if stderr:
+                                print(stderr, file=stderr_fh)
+                                stderr_fh.flush()
+
+
 def create_local_files(args, cloud, servers, pass_cfg):
     params = DEV_PW.copy()
     for pw_name in DEF_PASSES:
@@ -224,6 +262,8 @@ def transform(args, cloud, tracker, servers):
                           args, cloud, servers)
     tracker.call_and_mark(create_local_files,
                           args, cloud, servers, pass_cfg)
+    tracker.call_and_mark(run_stack,
+                          args, cloud, tracker, servers)
 
 
 def create(args, cloud, tracker):
