@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 from binascii import hexlify
 from datetime import datetime
 
@@ -24,26 +26,25 @@ from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 PASS_CHARS = string.ascii_lowercase + string.digits
 
 
-class BustedCommand(Exception):
-    def __init__(self, cmd, server,
-                 exit_code, stdout, stderr):
-        msg = ("Unable to run '%s' on server %s"
-               " failed with exit code %s:\n"
-               " stderr: %s\n"
-               " stdout: %s" % (cmd, server.name,
-                                exit_code, stderr, stdout))
-        super(BustedCommand, self).__init__(msg)
-
-
-def run_and_check(machine, server, cmd):
-    s = machine.session()
-    with s:
-        rc, stdout, stderr = s.run(cmd)
-        if rc != 0:
-            raise BustedCommand(cmd, server,
-                                rc, stdout, stderr)
-        else:
-            return stdout, stderr
+def run_and_record(base_record_path, cmd, *cmd_args, **kwargs):
+    indent = kwargs.get('indent', '')
+    display_name = kwargs.get('server_name', cmd.machine.host)
+    print("%sRunning '%s' on server"
+          " %s, please wait..." % (indent, " ".join(cmd.formulate()),
+                                   display_name))
+    stderr_path = "%s.stderr" % base_record_path
+    stdout_path = "%s.stdout" % base_record_path
+    with open(stderr_path, 'wb') as stderr_fh:
+        with open(stdout_path, 'wb') as stdout_fh:
+            print("%s  Output file (stderr): %s" % (indent, stderr_fh.name))
+            print("%s  Output file (stdout): %s" % (indent, stdout_fh.name))
+            for stdout, stderr in cmd.popen(*cmd_args).iter_lines():
+                if stdout:
+                    print(stdout, file=stdout_fh)
+                    stdout_fh.flush()
+                if stderr:
+                    print(stderr, file=stderr_fh)
+                    stderr_fh.flush()
 
 
 class Tracker(object):
@@ -61,8 +62,10 @@ class Tracker(object):
         for line in contents.splitlines():
             line = line.strip()
             if line:
-                r = munch.munchify(json.loads(line))
-                records.append(r.record)
+                r = json.loads(line)
+                r = r['record']
+                r = munch.munchify(r)
+                records.append(r)
         self._last_block = tuple(records)
 
     @property
@@ -81,12 +84,17 @@ class Tracker(object):
         if self._fh is not None:
             self._fh.close()
             self._fh = None
-            self._last_block = ()
+        self._last_block = ()
 
     def call_and_mark(self, func, *args, **kwargs):
         kind = func.__name__
-        pretty_kind = kind.replace("_", " ")
-        print("Activating step %s, please wait..." % pretty_kind)
+        func_docs = getattr(func, '__doc__', '')
+        if func_docs:
+            print("Activating step '%s' which will:" % (kind))
+            print("  %s" % func_docs)
+            print("Please wait...")
+        else:
+            print("Activating step '%s', please wait..." % (kind))
         matches = self.search_last_using(lambda r: r.kind == kind)
         if not matches:
             result = func(*args, **kwargs)
@@ -103,15 +111,15 @@ class Tracker(object):
         return matches
 
     def _write(self, record):
-        record['written_on'] = datetime.now().isoformat()
-        self._fh.write(json.dumps(munch.unmunchify(record)))
+        self._fh.write(json.dumps(record))
         self._fh.write("\n")
         self._fh.flush()
 
     def record(self, record):
         if self._fh is None:
-            raise IOError("Can not add a 'user' record on a unopened tracker")
-        self._write({'kind': 'user', 'record': record})
+            raise IOError("Can not add a record on a unopened tracker")
+        self._write({'record': munch.unmunchify(record),
+                     'written_on': datetime.now().isoformat()})
         self.reload()
 
 
@@ -167,7 +175,7 @@ def ssh_connect(ip, connect_timeout=1.0,
                 user=None, password=None,
                 server_name=None):
     if server_name:
-        display_name = server_name + " [%s]" % ip
+        display_name = server_name + " via " + ip
     else:
         display_name = ip
     attempt = 1
@@ -183,7 +191,7 @@ def ssh_connect(ip, connect_timeout=1.0,
         except (plumbum.machines.session.SSHCommsChannel2Error,
                 plumbum.machines.session.SSHCommsError, socket.error,
                 paramiko.ssh_exception.AuthenticationException) as e:
-            print("%sFailed to connect to %s: %s" % (indent, ip, e))
+            print("%sFailed to connect to %s" % (indent, display_name, e))
             backoff = min(max_backoff, 2 ** attempt)
             attempt += 1
             if attempt > max_attempts:

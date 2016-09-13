@@ -21,7 +21,6 @@ DEF_PASSES = [
     'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
     'RABBIT_PASSWORD',
 ]
-DEF_BRANCH = "stable/liberty"
 DEF_USERDATA_TPL = """#!/bin/bash
 set -x
 
@@ -51,7 +50,7 @@ cat > /etc/sudoers.d/99-$tobe_user << EOF
 $tobe_user ALL=(ALL) NOPASSWD:ALL
 EOF
 """
-DEV_PW = {
+DEFAULT_PASSWORDS = {
     # We can't seem to alter this one more than once,
     # so just leave it as is... todo fix this and make it so that
     # we reset it...
@@ -93,9 +92,10 @@ def bind_subparser(subparsers):
     parser_create.add_argument("-b", "--branch",
                                help="devstack branch (default=%(default)s)",
                                default="stable/liberty")
-    parser_create.add_argument("-o", "--output-dir",
-                               help="output scratch directory (default=%(default)s)",
-                               default=os.path.join(os.getcwd(), "output"))
+    parser_create.add_argument("-s", "--scratch-dir",
+                               help="cmd output and/or scratch"
+                                    " directory (default=%(default)s)",
+                               default=os.path.join(os.getcwd(), "scratch"))
     parser_create.set_defaults(func=create)
     return parser_create
 
@@ -156,73 +156,45 @@ def az_sorter(az1, az2):
         return 0
 
 
-def checkout_devstack_branch(args, cloud, servers):
-    results = {}
-    for kind, instance in servers.items():
-        cmd = "cd devstack && git checkout %s" % DEF_BRANCH
-        stdout, stderr = utils.run_and_check(instance.machine,
-                                             instance.server, cmd)
-        results[kind] = (stdout, stderr)
-    return results
-
-
 def clone_devstack(args, cloud, servers):
+    """Clears prior devstack and clones devstack."""
     for kind, instance in servers.items():
         sys.stdout.write("  Cloning devstack in"
                          " server %s " % instance.server.name)
-        sys.stdout.flush()
-        cmd = "rm -rf devstack"
-        stdout, stderr = utils.run_and_check(instance.machine,
-                                             instance.server, cmd)
-        cmd = "git clone git://git.openstack.org/openstack-dev/devstack"
-        stdout, stderr = utils.run_and_check(instance.machine,
-                                             instance.server, cmd)
+        git = instance.machine['git']
+        git("clone", "git://git.openstack.org/openstack-dev/devstack")
+        git('checkout', args.branch, cwd="devstack")
         sys.stdout.write("(OK) \n")
 
 
 def run_stack(args, cloud, tracker, servers):
-    matches = tracker.search_last_using(lambda r: r.kind == "stacked")
-    already_done = set(r.server_kind for r in matches)
+    """Activates stack.sh on the various servers (in the right order)."""
     output_dir = utils.safe_make_dir(args.output_dir)
     # Order matters here.
     for kind in ['map']:
-        if kind in already_done:
-            continue
-        else:
-            instance = servers[kind]
-            out_files = {
-                'stdout': os.path.join(output_dir,
-                                       "%s.stdout" % instance.server.name),
-                'stderr': os.path.join(output_dir,
-                                       "%s.stderr" % instance.server.name),
-            }
-            stack_cmd = instance.machine['/home/stack/devstack/stack.sh']
-            print("  Running stack.sh on server %s" % instance.server.name)
-            with open(out_files['stderr'], 'wb') as stderr_fh:
-                with open(out_files['stdout'], 'wb') as stdout_fh:
-                    print("    Output file (stderr): %s" % stderr_fh.name)
-                    print("    Output file (stdout): %s" % stdout_fh.name)
-                    for stdout, stderr in stack_cmd.popen().iter_lines():
-                        if stdout:
-                            print(stdout, file=stdout_fh)
-                            stdout_fh.flush()
-                        if stderr:
-                            print(stderr, file=stderr_fh)
-                            stderr_fh.flush()
+        instance = servers[kind]
+        cmd = instance.machine['/home/stack/devstack/stack.sh']
+        utils.run_and_record(
+            os.path.join(args.scratch_dir, "stack_for_%s" % kind),
+            cmd, indent="  ", server_name=instance.server.name)
 
 
 def create_local_files(args, cloud, servers, pass_cfg):
-    params = DEV_PW.copy()
+    """Creates and uploads all local.conf files for devstack."""
+    output_dir = utils.safe_make_dir(args.output_dir)
+    params = dict(DEFAULT_PASSWORDS)
     for pw_name in DEF_PASSES:
         params[pw_name] = pass_cfg.get("passwords", pw_name)
     for kind, instance in servers.items():
         local_tpl_pth = os.path.join("templates", "local.%s.tpl" % kind)
-        mach = instance.machine
-        with open(local_tpl_pth, 'rb') as fh:
-            with tempfile.NamedTemporaryFile() as t_fh:
-                t_fh.write(utils.render_tpl(fh.read(), params))
-                t_fh.flush()
-                mach.upload(t_fh.name, "/home/stack/devstack/local.conf")
+        local_tpl_out_pth = os.path.join(args.scratch_dir,
+                                         "local.%s.conf" % kind)
+        with open(local_tpl_pth, 'rb') as i_fh:
+            with open(local_tpl_out_pth, 'wb') as o_fh:
+                o_fh.write(utils.render_tpl(i_fh.read(), params))
+                o_fh.flush()
+                instance.machine.upload(local_tpl_out_pth,
+                                        "/home/stack/devstack/local.conf")
 
 
 def transform(args, cloud, tracker, servers):
@@ -256,8 +228,6 @@ def transform(args, cloud, tracker, servers):
             pass_cfg.write(fh)
         needs_write = False
     tracker.call_and_mark(clone_devstack,
-                          args, cloud, servers)
-    tracker.call_and_mark(checkout_devstack_branch,
                           args, cloud, servers)
     tracker.call_and_mark(create_local_files,
                           args, cloud, servers, pass_cfg)
@@ -403,19 +373,18 @@ def create(args, cloud, tracker):
                             server_ip, indent="  ",
                             user='stack', password='stack',
                             server_name=server.name)
-            fut.instance = munch.Munch({
+            instance = munch.Munch({
                 'server': server,
                 'server_ip': server_ip,
+                'kind': kind,
             })
-            fut.kind = kind
-            futs.append(fut)
+            futs.append((fut, instance))
     try:
         # Reform with the futures results...
         servers = {}
-        for fut in futs:
-            instance = fut.instance
+        for fut, instance in futs:
             instance.machine = fut.result()
-            servers[fut.kind] = instance
+            servers[instance.kind] = instance
         # Now turn those into something useful...
         transform(args, cloud, tracker, servers)
     finally:
