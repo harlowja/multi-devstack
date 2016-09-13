@@ -20,7 +20,7 @@ DEF_PASSES = [
     'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
     'RABBIT_PASSWORD',
 ]
-DEF_USERDATA_TPL = """#!/bin/bash
+DEF_USERDATA = """#!/bin/bash
 set -x
 
 # Install some common things...
@@ -28,8 +28,6 @@ yum install -y git nano
 yum install -y python-devel
 yum install -y libffi-devel openssl-devel mysql-devel \
                postgresql-devel libxml2-devel libxslt-devel openldap-devel
-
-%(extra_packs)s
 
 # Seems needed as a fix to avoid devstack later breaking...
 touch /etc/sysconfig/iptables
@@ -174,7 +172,8 @@ def run_stack(args, cloud, tracker, servers):
         instance = servers[kind]
         cmd = instance.machine['/home/stack/devstack/stack.sh']
         utils.run_and_record(
-            os.path.join(args.scratch_dir, "stack_for_%s" % kind),
+            os.path.join(args.scratch_dir,
+                         "%s.stack" % instance.server.name),
             cmd, indent="  ", server_name=instance.server.name)
 
 
@@ -185,9 +184,10 @@ def create_local_files(args, cloud, servers, pass_cfg):
     for pw_name in DEF_PASSES:
         params[pw_name] = pass_cfg.get("passwords", pw_name)
     for kind, instance in servers.items():
+        server_name = instance.server.name
         local_tpl_pth = os.path.join("templates", "local.%s.tpl" % kind)
         local_tpl_out_pth = os.path.join(args.scratch_dir,
-                                         "local.%s.conf" % kind)
+                                         "local.%s.conf" % server_name)
         with open(local_tpl_pth, 'rb') as i_fh:
             with open(local_tpl_out_pth, 'wb') as o_fh:
                 o_fh.write(utils.render_tpl(i_fh.read(), params))
@@ -283,18 +283,13 @@ def create(args, cloud, tracker):
                 'user': cloud.auth['username'],
                 'rand': random.randrange(1, 99),
             }
-            ud_tpl_vals = {
-                'extra_packs': utils.read_file(
-                    os.path.join("templates", "packs.%s" % kind)),
-            }
-            ud = DEF_USERDATA_TPL % ud_tpl_vals
             name = name_tpl % name_tpl_vals
             topo[kind] = {
                 'name': name,
                 'flavor': flavors[kind],
                 'image': image,
                 'availability_zone': az,
-                'user_data': ud,
+                'user_data': DEF_USERDATA,
             }
             pretty_topo[kind] = {
                 'name': name,
