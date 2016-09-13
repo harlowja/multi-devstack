@@ -17,7 +17,6 @@ import munch
 from builder import pprint
 from builder import utils
 
-OUTPUT_DIR = "output"
 DEF_PASSES = [
     'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
     'RABBIT_PASSWORD',
@@ -94,6 +93,9 @@ def bind_subparser(subparsers):
     parser_create.add_argument("-b", "--branch",
                                help="devstack branch (default=%(default)s)",
                                default="stable/liberty")
+    parser_create.add_argument("-o", "--output-dir",
+                               help="output scratch directory (default=%(default)s)",
+                               default="output")
     parser_create.set_defaults(func=create)
     return parser_create
 
@@ -181,9 +183,9 @@ def run_stack(args, cloud, tracker, servers):
     # Order matters here.
     matches = tracker.search_last_using(lambda r: r.kind == "stacked")
     already_done = set(r.server_kind for r in matches)
-    # TODO(harlowja): make this an argument?
-    if not os.path.isdir(OUTPUT_DIR):
-        os.makedirs(OUTPUT_DIR)
+    output_dir = args.output_dir
+    if not os.path.isdir(output_dir):
+        os.makedirs(output_dir)
     for kind in ['map']:
         if kind in already_done:
             continue
@@ -199,8 +201,8 @@ def run_stack(args, cloud, tracker, servers):
                         print(stderr, file=sys.stderr)
             else:
                 print("  Running stack.sh on server %s" % details['server'].name)
-                with open(os.path.join(OUTPUT_DIR, "%s.stderr" % details['server'].name), 'wb') as stderr_fh:
-                    with open(os.path.join(OUTPUT_DIR, "%s.stdout" % details['server'].name), 'wb') as stdout_fh:
+                with open(os.path.join(output_dir, "%s.stderr" % details['server'].name), 'wb') as stderr_fh:
+                    with open(os.path.join(output_dir, "%s.stdout" % details['server'].name), 'wb') as stdout_fh:
                         print("    Output file (stderr): %s" % stderr_fh.name)
                         print("    Output file (stdout): %s" % stdout_fh.name)
                         for stdout, stderr in stack_cmd.popen().iter_lines():
