@@ -245,6 +245,8 @@ def create(args, cloud, tracker):
             raise RuntimeError("Can not create '%s' instances without"
                                " matching flavor '%s'" % (kind, kind_flv))
         flavors[kind] = flv
+    with open(os.path.join("templates", "ud.tpl"), "rb") as fh:
+        ud = utils.render_tpl(fh.read(), {})
     print("Spawning the following instances in availability zone: %s" % az)
     topo = {}
     pretty_topo = {}
@@ -253,8 +255,6 @@ def create(args, cloud, tracker):
     pre_creates = dict((r.server_kind, r.server_details)
                         for r in tracker.search_last_using(
                             lambda r: r.kind == 'server_pre_create'))
-    with open(os.path.join("templates", "ud.tpl"), "rb") as fh:
-        ud = utils.render_tpl(fh.read(), {})
     for kind, name_tpl in DEV_TOPO:
         if kind not in pre_creates:
             name_tpl_vals = {
