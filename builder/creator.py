@@ -4,8 +4,8 @@ import errno
 import logging
 import os
 import random
-import tempfile
 import sys
+import tempfile
 
 from concurrent import futures
 from distutils.version import LooseVersion
@@ -158,43 +158,48 @@ def az_sorter(az1, az2):
 
 def checkout_devstack_branch(args, cloud, servers):
     results = {}
-    for kind, details in servers.items():
+    for kind, instance in servers.items():
         cmd = "cd devstack && git checkout %s" % DEF_BRANCH
-        stdout, stderr = utils.run_and_check(details['machine'],
-                                             details['server'], cmd)
+        stdout, stderr = utils.run_and_check(instance.machine,
+                                             instance.server, cmd)
         results[kind] = (stdout, stderr)
     return results
 
 
 def clone_devstack(args, cloud, servers):
-    for kind, details in servers.items():
-        sys.stdout.write("  Cloning devstack in server %s " % details['server'].name)
+    for kind, instance in servers.items():
+        sys.stdout.write("  Cloning devstack in"
+                         " server %s " % instance.server.name)
         sys.stdout.flush()
         cmd = "rm -rf devstack"
-        stdout, stderr = utils.run_and_check(details['machine'],
-                                             details['server'], cmd)
+        stdout, stderr = utils.run_and_check(instance.machine,
+                                             instance.server, cmd)
         cmd = "git clone git://git.openstack.org/openstack-dev/devstack"
-        stdout, stderr = utils.run_and_check(details['machine'],
-                                             details['server'], cmd)
+        stdout, stderr = utils.run_and_check(instance.machine,
+                                             instance.server, cmd)
         sys.stdout.write("(OK) \n")
 
 
 def run_stack(args, cloud, tracker, servers):
-    # Order matters here.
     matches = tracker.search_last_using(lambda r: r.kind == "stacked")
     already_done = set(r.server_kind for r in matches)
-    output_dir = args.output_dir
-    if not os.path.isdir(output_dir):
-        os.makedirs(output_dir)
+    output_dir = utils.safe_make_dir(args.output_dir)
+    # Order matters here.
     for kind in ['map']:
         if kind in already_done:
             continue
         else:
-            details = servers[kind]
-            stack_cmd = details['machine']['/home/stack/devstack/stack.sh']
-            print("  Running stack.sh on server %s" % details['server'].name)
-            with open(os.path.join(output_dir, "%s.stderr" % details['server'].name), 'wb') as stderr_fh:
-                with open(os.path.join(output_dir, "%s.stdout" % details['server'].name), 'wb') as stdout_fh:
+            instance = servers[kind]
+            out_files = {
+                'stdout': os.path.join(output_dir,
+                                       "%s.stdout" % instance.server.name),
+                'stderr': os.path.join(output_dir,
+                                       "%s.stderr" % instance.server.name),
+            }
+            stack_cmd = instance.machine['/home/stack/devstack/stack.sh']
+            print("  Running stack.sh on server %s" % instance.server.name)
+            with open(out_files['stderr'], 'wb') as stderr_fh:
+                with open(out_files['stdout'], 'wb') as stdout_fh:
                     print("    Output file (stderr): %s" % stderr_fh.name)
                     print("    Output file (stdout): %s" % stdout_fh.name)
                     for stdout, stderr in stack_cmd.popen().iter_lines():
@@ -210,9 +215,9 @@ def create_local_files(args, cloud, servers, pass_cfg):
     params = DEV_PW.copy()
     for pw_name in DEF_PASSES:
         params[pw_name] = pass_cfg.get("passwords", pw_name)
-    for kind, details in servers.items():
+    for kind, instance in servers.items():
         local_tpl_pth = os.path.join("templates", "local.%s.tpl" % kind)
-        mach = details['machine']
+        mach = instance.machine
         with open(local_tpl_pth, 'rb') as fh:
             with tempfile.NamedTemporaryFile() as t_fh:
                 t_fh.write(utils.render_tpl(fh.read(), params))
@@ -398,19 +403,19 @@ def create(args, cloud, tracker):
                             server_ip, indent="  ",
                             user='stack', password='stack',
                             server_name=server.name)
-            fut.details = {
+            fut.instance = munch.Munch({
                 'server': server,
                 'server_ip': server_ip,
-            }
+            })
             fut.kind = kind
             futs.append(fut)
     try:
         # Reform with the futures results...
         servers = {}
         for fut in futs:
-            details = dict(fut.details)
-            details['machine'] = fut.result()
-            servers[fut.kind] = details
+            instance = fut.instance
+            instance.machine = fut.result()
+            servers[fut.kind] = instance
         # Now turn those into something useful...
         transform(args, cloud, tracker, servers)
     finally:

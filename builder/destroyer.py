@@ -3,10 +3,6 @@ from __future__ import print_function
 import os
 import shutil
 
-import yaml
-
-from builder import utils
-
 
 def bind_subparser(subparsers):
     parser_destroy = subparsers.add_parser('destroy')

@@ -1,23 +1,25 @@
 from binascii import hexlify
 from datetime import datetime
+
 import errno
+import json
+import os
 import random
 import socket
 import string
 import time
-import shutil
-import json
 
 import jinja2
 from jinja2 import Template
 import munch
 
 from monotonic import monotonic as now
-from paramiko.common import DEBUG
 import paramiko
 import plumbum
-from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 import yaml
+
+from paramiko.common import DEBUG
+from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 
 PASS_CHARS = string.ascii_lowercase + string.digits
 
@@ -142,6 +144,17 @@ def read_file(path, mode='rb', default=''):
             return default
         else:
             raise
+
+
+def safe_make_dir(a_dir):
+    try:
+        os.makedirs(a_dir)
+    except OSError as e:
+        if (e.errno == errno.EEXIST and os.path.isdir(a_dir)):
+            pass
+        else:
+            raise
+    return a_dir
 
 
 def render_tpl(content, params):
