@@ -7,6 +7,7 @@ RABBIT_PASSWORD={{ RABBIT_PASSWORD }}
 SERVICE_PASSWORD={{ SERVICE_PASSWORD }}
 DATABASE_PASSWORD={{ DATABASE_PASSWORD }}
 DATABASE_HOST={{ DATABASE_HOST }}
+RABBIT_HOST={{ RABBIT_HOST }}
 
 LOGFILE=/opt/stack/logs/stack.sh.log
 VERBOSE=True
@@ -17,8 +18,10 @@ GIT_BASE=${GIT_BASE:-https://git.openstack.org}
 ENABLE_DEBUG_LOG_LEVEL=true
 USE_VENV=true
 DATABASE_TYPE=mysql
+VIRT_DRIVER=libvirt
+LIBVIRT_TYPE=qemu
 
 ENABLED_SERVICES=nova
 ENABLED_SERVICES+=n-api-meta,n-cpu
 DISABLED_SERVICE+=,n-net,n-sch,n-cell,n-api,n-obj,n-novnc,n-xvnc,n-spice
-
+DISABLED_SERVICE+=,n-crt,n-cauth,n-sproxy

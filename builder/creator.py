@@ -154,6 +154,10 @@ def create_local_files(args, cloud, servers, pass_cfg):
     params = dict(DEFAULT_PASSWORDS)
     for pw_name in PASSES:
         params[pw_name] = pass_cfg.get("passwords", pw_name)
+    params.update({
+        'DATABASE_HOST': servers['map'].server_ip,
+        'RABBIT_HOST': servers['rb'].server_ip,
+    })
     for kind, instance in servers.items():
         server_name = instance.server.name
         local_tpl_out_pth = os.path.join(args.scratch_dir,
