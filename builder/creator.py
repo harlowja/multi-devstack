@@ -95,7 +95,7 @@ def bind_subparser(subparsers):
                                default="stable/liberty")
     parser_create.add_argument("-o", "--output-dir",
                                help="output scratch directory (default=%(default)s)",
-                               default="output")
+                               default=os.path.join(os.getcwd(), "output"))
     parser_create.set_defaults(func=create)
     return parser_create
 
