@@ -16,37 +16,10 @@ import munch
 from builder import pprint
 from builder import utils
 
-DEF_PASSES = [
+PASSES = [
     'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
     'RABBIT_PASSWORD',
 ]
-DEF_USERDATA = """#!/bin/bash
-set -x
-
-# Install some common things...
-yum install -y git nano
-yum install -y python-devel
-yum install -y libffi-devel openssl-devel mysql-devel \
-               postgresql-devel libxml2-devel libxslt-devel openldap-devel
-
-# Seems needed as a fix to avoid devstack later breaking...
-touch /etc/sysconfig/iptables
-
-# Creat the user we want...
-tobe_user=stack
-tobe_user_pw=stack
-id -u $tobe_user &>/dev/null
-if [ $? -ne 0 ]; then
-    useradd "$tobe_user" --groups root --gid 0 -m -s /bin/bash -d "/home/$tobe_user"
-fi
-echo "$tobe_user_pw" | passwd --stdin "$tobe_user"
-
-cat > /etc/sudoers.d/99-$tobe_user << EOF
-# Automatically generated at slave creation time.
-# Do not edit.
-$tobe_user ALL=(ALL) NOPASSWD:ALL
-EOF
-"""
 DEFAULT_PASSWORDS = {
     # We can't seem to alter this one more than once,
     # so just leave it as is... todo fix this and make it so that
@@ -181,7 +154,7 @@ def create_local_files(args, cloud, servers, pass_cfg):
     """Creates and uploads all local.conf files for devstack."""
     utils.safe_make_dir(args.scratch_dir)
     params = dict(DEFAULT_PASSWORDS)
-    for pw_name in DEF_PASSES:
+    for pw_name in PASSES:
         params[pw_name] = pass_cfg.get("passwords", pw_name)
     for kind, instance in servers.items():
         server_name = instance.server.name
@@ -195,9 +168,7 @@ def create_local_files(args, cloud, servers, pass_cfg):
                 instance.machine.upload(local_tpl_out_pth,
                                         "/home/stack/devstack/local.conf")
 
-
-def transform(args, cloud, tracker, servers):
-    """Turn (mostly) raw servers into useful things."""
+def setup_pass_cfg(args):
     # Ensure all needed (to-be-used) passwords exist and have a value.
     if args.passwords:
         try:
@@ -215,7 +186,7 @@ def transform(args, cloud, tracker, servers):
     if not pass_cfg.has_section('passwords'):
         pass_cfg.add_section('passwords')
         needs_write = True
-    for pw_name in DEF_PASSES:
+    for pw_name in PASSES:
         if pass_cfg.has_option("passwords", pw_name):
             pw = pass_cfg.get("passwords", pw_name)
             if pw:
@@ -226,10 +197,15 @@ def transform(args, cloud, tracker, servers):
         with open(args.passwords, "wb") as fh:
             pass_cfg.write(fh)
         needs_write = False
+    return pass_cfg
+
+
+def transform(args, cloud, tracker, servers):
+    """Turn (mostly) raw servers into useful things."""
     tracker.call_and_mark(clone_devstack,
                           args, cloud, servers)
     tracker.call_and_mark(create_local_files,
-                          args, cloud, servers, pass_cfg)
+                          args, cloud, servers, setup_pass_cfg(args))
     tracker.call_and_mark(run_stack,
                           args, cloud, tracker, servers)
 
@@ -277,6 +253,8 @@ def create(args, cloud, tracker):
     pre_creates = dict((r.server_kind, r.server_details)
                         for r in tracker.search_last_using(
                             lambda r: r.kind == 'server_pre_create'))
+    with open(os.path.join("templates", "ud.tpl", "rb") as fh:
+        ud = utils.render_tpl(fh.read(), {})
     for kind, name_tpl in DEV_TOPO:
         if kind not in pre_creates:
             name_tpl_vals = {
@@ -289,7 +267,7 @@ def create(args, cloud, tracker):
                 'flavor': flavors[kind],
                 'image': image,
                 'availability_zone': az,
-                'user_data': DEF_USERDATA,
+                'user_data': ud,
             }
             pretty_topo[kind] = {
                 'name': name,
