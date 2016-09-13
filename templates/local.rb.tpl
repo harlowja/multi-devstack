@@ -16,9 +16,4 @@ GIT_BASE=${GIT_BASE:-https://git.openstack.org}
 
 ENABLE_DEBUG_LOG_LEVEL=true
 USE_VENV=true
-DATABASE_TYPE=mysql
-
-ENABLED_SERVICES=key,glance,neutron,nova
-ENABLED_SERVICES+=,n-cell,n-api-meta
-DISABLED_SERVICE+=,n-cpu,n-net,n-sch
-
+ENABLED_SERVICES=rabbit

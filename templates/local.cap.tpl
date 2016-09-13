@@ -18,5 +18,6 @@ ENABLE_DEBUG_LOG_LEVEL=true
 USE_VENV=true
 DATABASE_TYPE=mysql
 
+ENABLED_SERVICES=key,glance,nova
 ENABLED_SERVICES+=,n-cell
-ENABLED_SERVICES+=,q-svc,q-agt,q-dhcp,q-l3,q-meta,neutron
+DISABLED_SERVICE+=,n-cpu,n-net,n-sch,n-api-meta,n-obj,n-novnc,n-xvnc,n-spice

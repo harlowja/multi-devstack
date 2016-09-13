@@ -20,4 +20,4 @@ DATABASE_TYPE=mysql
 
 ENABLED_SERVICES=key,glance,nova,mysql
 ENABLED_SERVICES+=,n-cell
-DISABLED_SERVICE+=,n-cpu,n-net,n-sch,n-api-meta
+DISABLED_SERVICE+=,n-cpu,n-net,n-sch,n-api-meta,n-obj,n-novnc,n-xvnc,n-spice

@@ -29,8 +29,7 @@ DEFAULT_PASSWORDS = {
 DEV_TOPO = tuple([
     ('cap', '%(user)s-cap-%(rand)s'),
     ('map', '%(user)s-map-%(rand)s'),
-    ('top_rb', '%(user)s-trb-%(rand)s'),
-    ('bottom_rb', '%(user)s-brb-%(rand)s'),
+    ('rb', '%(user)s-rb-%(rand)s'),
     ('hv', '%(user)s-hv-%(rand)s'),
 ])
 DEV_FLAVORS = {
@@ -158,15 +157,21 @@ def create_local_files(args, cloud, servers, pass_cfg):
         params[pw_name] = pass_cfg.get("passwords", pw_name)
     for kind, instance in servers.items():
         server_name = instance.server.name
-        local_tpl_pth = os.path.join("templates", "local.%s.tpl" % kind)
         local_tpl_out_pth = os.path.join(args.scratch_dir,
                                          "local.%s.conf" % server_name)
         with open(local_tpl_pth, 'rb') as i_fh:
             with open(local_tpl_out_pth, 'wb') as o_fh:
-                o_fh.write(utils.render_tpl(i_fh.read(), params))
+                o_fh.write(read_render_tpl("local.%s.tpl" % kind, params))
                 o_fh.flush()
                 instance.machine.upload(local_tpl_out_pth,
                                         "/home/stack/devstack/local.conf")
+
+
+def read_render_tpl(template_name, params):
+    template_path = os.path.join("templates", template_name)
+    with open(template_path, "rb") as i_fh:
+        return utils.render_tpl(i_fh.read(), params)
+
 
 def setup_pass_cfg(args):
     # Ensure all needed (to-be-used) passwords exist and have a value.
@@ -245,8 +250,7 @@ def create(args, cloud, tracker):
             raise RuntimeError("Can not create '%s' instances without"
                                " matching flavor '%s'" % (kind, kind_flv))
         flavors[kind] = flv
-    with open(os.path.join("templates", "ud.tpl"), "rb") as fh:
-        ud = utils.render_tpl(fh.read(), {})
+    ud = read_render_tpl("ud.tpl", {})
     print("Spawning the following instances in availability zone: %s" % az)
     topo = {}
     pretty_topo = {}
