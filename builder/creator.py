@@ -156,7 +156,7 @@ def az_sorter(az1, az2):
 
 
 def clone_devstack(args, cloud, servers):
-    """Clears prior devstack and clones devstack."""
+    """Clears prior devstack and clones devstack + adjusts branch."""
     for kind, instance in servers.items():
         sys.stdout.write("  Cloning devstack in"
                          " server %s " % instance.server.name)

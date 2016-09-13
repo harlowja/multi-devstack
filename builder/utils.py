@@ -90,8 +90,8 @@ class Tracker(object):
         kind = func.__name__
         func_docs = getattr(func, '__doc__', '')
         if func_docs:
-            print("Activating step '%s' which will:" % (kind))
-            print("  %s" % func_docs)
+            print("Activating step '%s'" % (kind))
+            print("Details: '%s'" % func_docs)
             print("Please wait...")
         else:
             print("Activating step '%s', please wait..." % (kind))
@@ -191,7 +191,7 @@ def ssh_connect(ip, connect_timeout=1.0,
         except (plumbum.machines.session.SSHCommsChannel2Error,
                 plumbum.machines.session.SSHCommsError, socket.error,
                 paramiko.ssh_exception.AuthenticationException) as e:
-            print("%sFailed to connect to %s" % (indent, display_name, e))
+            print("%sFailed to connect to %s: %s" % (indent, display_name, e))
             backoff = min(max_backoff, 2 ** attempt)
             attempt += 1
             if attempt > max_attempts:
