@@ -14,6 +14,7 @@ import plumbum
 from builder import pprint
 from builder import utils
 
+# The default stack user name and password...
 DEF_USER, DEF_PW = ('stack', 'stack')
 DEFAULT_SETTINGS = {
     # We can't seem to alter this one more than once,
@@ -150,11 +151,11 @@ def run_stack(args, cloud, tracker, servers):
             stderr_len = len(e.stderr)
             e.stderr = e.stderr[0:128]
             if stderr_len > 128:
-                e.stderr += " (and %s more)" % (stderr_len - 128)
+                e.stderr += " (and %sb more)" % (stderr_len - 128)
             stdout_len = len(e.stdout)
             e.stdout = e.stdout[0:128]
             if stdout_len > 128:
-                e.stdout += " (and %s more)" % (stdout_len - 128)
+                e.stdout += " (and %sb more)" % (stdout_len - 128)
             raise e
 
 
