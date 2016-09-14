@@ -47,7 +47,7 @@ class BashConf(object):
                     continue
                 clean_line = clean_line[len("export"):]
                 try:
-                    var_name, value = line.split("=", 1)
+                    var_name, value = clean_line.split("=", 1)
                 except ValueError:
                     self._lines.append(['bad', line])
                 else:
