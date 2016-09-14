@@ -15,6 +15,8 @@ from builder import pprint
 from builder import utils
 
 # The default stack user name and password...
+#
+# Someday make this better?
 DEF_USER, DEF_PW = ('stack', 'stack')
 DEFAULT_SETTINGS = {
     # We can't seem to alter this one more than once,
@@ -266,10 +268,9 @@ def create(args, cloud, tracker):
         flavors[kind] = flv
     # Ensure this is ready and waiting...
     utils.safe_make_dir(args.scratch_dir)
-    # Someday make this better?
     ud_params = {
-        'USER': 'stack',
-        'USER_PW': 'stack',
+        'USER': DEF_USER,
+        'USER_PW': DEF_PW,
     }
     ud = read_render_tpl("ud.tpl", ud_params)
     print("Spawning the following instances in availability zone: %s" % az)
