@@ -3,13 +3,10 @@ from __future__ import print_function
 from binascii import hexlify
 from datetime import datetime
 
-import collections
 import errno
 import json
 import os
 import random
-import re
-import shlex
 import socket
 import string
 import time
