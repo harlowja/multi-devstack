@@ -148,15 +148,13 @@ def run_stack(args, cloud, tracker, servers):
         except plumbum.ProcessExecutionError as e:
             # These get way to big (trim them down, as we are already
             # recording there full output to files anyway).
-            stderr_len = len(e.stderr)
-            e.stderr = e.stderr[0:128]
-            if stderr_len > 128:
-                e.stderr += " (and %sb more)" % (stderr_len - 128)
-            stdout_len = len(e.stdout)
-            e.stdout = e.stdout[0:128]
-            if stdout_len > 128:
-                e.stdout += " (and %sb more)" % (stdout_len - 128)
-            raise e
+            exc_info = sys.exc_info()
+            try:
+                e.stderr = utils.trim_it(e.stderr, 128)
+                e.stdout = utils.trim_it(e.stdout, 128)
+                raise exc_info
+            finally:
+                del exc_info
 
 
 def create_local_files(args, cloud, servers, settings):

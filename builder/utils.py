@@ -93,6 +93,14 @@ class BashConf(object):
                     fp.write("\n")
 
 
+def trim_it(block, max_len):
+    block_len = len(block)
+    block = block[0:max_len]
+    if block_len > max_len:
+        block += " (and %sb more)" % (block_len - max_len)
+    return block
+
+
 def run_and_record(base_record_path, cmd, *cmd_args, **kwargs):
     indent = kwargs.get('indent', '')
     display_name = kwargs.get('server_name', cmd.machine.host)
