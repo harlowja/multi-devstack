@@ -31,9 +31,11 @@ DEV_TOPO = tuple([
     ('map', '%(user)s-map-%(rand)s'),
     ('rb', '%(user)s-rb-%(rand)s'),
     ('hv', '%(user)s-hv-%(rand)s'),
+    ('db', '%(user)s-db-%(rand)s'),
 ])
 DEV_FLAVORS = {
     'cap': 'm1.medium',
+    'db': 'm1.medium',
     'map': 'm1.large',
     'rb': 'm1.medium',
     'hv': 'm1.large',
@@ -166,7 +168,7 @@ def create_local_files(args, cloud, servers, settings):
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
     params.update({
-        'DATABASE_HOST': servers['map'].ip,
+        'DATABASE_HOST': servers['db'].ip,
         'RABBIT_HOST': servers['rb'].ip,
     })
     for kind, server in servers.items():
