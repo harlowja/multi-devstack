@@ -3,10 +3,13 @@ from __future__ import print_function
 from binascii import hexlify
 from datetime import datetime
 
+import collections
 import errno
 import json
 import os
 import random
+import re
+import shlex
 import socket
 import string
 import time
@@ -24,6 +27,73 @@ from paramiko.common import DEBUG
 from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 
 PASS_CHARS = string.ascii_lowercase + string.digits
+
+
+class BashConf(object):
+    """Primitive bash 'style' reader/writer."""
+
+    def __init__(self):
+        self._lines = [
+            ['comment', '# Created by GD cloud builder'],
+        ]
+
+    def read(self, path):
+        with open(path, 'rb') as fp:
+            self._lines = []
+            for line in fp.read().splitlines():
+                clean_line = line.strip()
+                if clean_line.startswith("#"):
+                    self._lines.append(['comment', line])
+                    continue
+                if not clean_line.startswith("export"):
+                    self._lines.append(['bad', line])
+                    continue
+                clean_line = clean_line[len("export"):]
+                try:
+                    var_name, value = line.split("=", 1)
+                except ValueError:
+                    self._lines.append(['bad', line])
+                else:
+                    self._lines.append(['var', var_name, value])
+
+    def itervars(self):
+        for line in self._lines:
+            kind = line[0]
+            if kind == 'var':
+                var_name, value = line[1:]
+                yield var_name, value
+
+    def __getitem__(self, key):
+        for line in self._lines:
+            kind = line[0]
+            if kind == 'var':
+                var_name, value = line[1:]
+                if var_name == key:
+                    return value
+        raise KeyError(key)
+
+    def __setitem__(self, key, value):
+        replaced = False
+        for line in self._lines:
+            kind = line[0]
+            if kind == 'var':
+                if line[1] == key:
+                    line[2] = value
+                    replaced = True
+        if not replaced:
+            self._lines.append(['var', str(key), str(value)])
+
+    def write(self, path):
+        with open(path, 'wb') as fp:
+            for line in self._lines:
+                kind = line[0]
+                if kind in ['comment', 'bad']:
+                    fp.write(line[1])
+                    fp.write("\n")
+                else:
+                    var_name, var_value = line[1:]
+                    fp.write("export %s=%s" % (var_name, var_value))
+                    fp.write("\n")
 
 
 def run_and_record(base_record_path, cmd, *cmd_args, **kwargs):

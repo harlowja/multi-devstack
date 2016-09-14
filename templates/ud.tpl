@@ -11,8 +11,8 @@ yum install -y libffi-devel openssl-devel mysql-devel \
 touch /etc/sysconfig/iptables
 
 # Create the user we want...
-tobe_user=stack
-tobe_user_pw=stack
+tobe_user='{{ USER }}'
+tobe_user_pw='{{ USER_PW }}'
 id -u $tobe_user &>/dev/null
 if [ $? -ne 0 ]; then
     useradd "$tobe_user" --groups root --gid 0 -m -s /bin/bash -d "/home/$tobe_user"

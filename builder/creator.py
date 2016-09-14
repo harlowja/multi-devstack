@@ -9,9 +9,8 @@ import sys
 from concurrent import futures
 from distutils.version import LooseVersion
 
-from iniparse import ConfigParser
-
 import munch
+import plumbum
 
 from builder import pprint
 from builder import utils
@@ -20,6 +19,7 @@ PASSES = [
     'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
     'RABBIT_PASSWORD',
 ]
+DEF_USER, DEF_PW = ('stack', 'stack')
 DEFAULT_PASSWORDS = {
     # We can't seem to alter this one more than once,
     # so just leave it as is... todo fix this and make it so that
@@ -55,7 +55,7 @@ def bind_subparser(subparsers):
                                default=None)
     parser_create.add_argument("-k", "--key-name",
                                help="key name to use when creating"
-                                    " instances (required for key-based"
+                                    " instances (allows for key-based"
                                     " authentication)")
     parser_create.add_argument("-b", "--branch",
                                help="devstack branch (default=%(default)s)",
@@ -126,10 +126,10 @@ def az_sorter(az1, az2):
 
 def clone_devstack(args, cloud, servers):
     """Clears prior devstack and clones devstack + adjusts branch."""
-    for kind, instance in servers.items():
+    for kind, server in servers.items():
         sys.stdout.write("  Cloning devstack in"
-                         " server %s " % instance.server.name)
-        git = instance.machine['git']
+                         " server %s " % server.name)
+        git = server.machine['git']
         git("clone", "git://git.openstack.org/openstack-dev/devstack")
         git('checkout', args.branch, cwd="devstack")
         sys.stdout.write("(OK) \n")
@@ -137,37 +137,51 @@ def clone_devstack(args, cloud, servers):
 
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
-    utils.safe_make_dir(args.scratch_dir)
     # Order matters here.
     for kind in ['map']:
-        instance = servers[kind]
-        cmd = instance.machine['/home/stack/devstack/stack.sh']
-        utils.run_and_record(
-            os.path.join(args.scratch_dir,
-                         "%s.stack" % instance.server.name),
-            cmd, indent="  ", server_name=instance.server.name)
+        server = servers[kind]
+        cmd = server.machine['/home/stack/devstack/stack.sh']
+        try:
+            utils.run_and_record(
+                os.path.join(args.scratch_dir, "%s.stack" % server.name),
+                cmd, indent="  ", server_name=server.name)
+        except plumbum.ProcessExecutionError as e:
+            # These get way to big (trim them down, as we are already
+            # recording there full output to files anyway).
+            stderr_len = len(e.stderr)
+            e.stderr = e.stderr[0:128]
+            if stderr_len > 128:
+                e.stderr += " (and %s more)" % (stderr_len - 128)
+            stdout_len = len(e.stdout)
+            e.stdout = e.stdout[0:128]
+            if stdout_len > 128:
+                e.stdout += " (and %s more)" % (stdout_len - 128)
+            raise e
 
 
-def create_local_files(args, cloud, servers, pass_cfg):
+def create_local_files(args, cloud, servers, settings):
     """Creates and uploads all local.conf files for devstack."""
-    utils.safe_make_dir(args.scratch_dir)
-    params = dict(DEFAULT_PASSWORDS)
-    for pw_name in PASSES:
-        params[pw_name] = pass_cfg.get("passwords", pw_name)
+    params = {}
+    params.update(DEFAULT_PASSWORDS)
+    params.update(settings.itervars())
+    # This needs to be done so that servers that will not have rabbit
+    # or the database on them (but need to access it will still have
+    # access to them, or know how to get to them).
     params.update({
-        'DATABASE_HOST': servers['map'].server_ip,
-        'RABBIT_HOST': servers['rb'].server_ip,
+        'DATABASE_HOST': servers['map'].ip,
+        'RABBIT_HOST': servers['rb'].ip,
     })
-    for kind, instance in servers.items():
-        server_name = instance.server.name
+    for kind, server in servers.items():
         local_tpl_out_pth = os.path.join(args.scratch_dir,
-                                         "local.%s.conf" % server_name)
-        with open(local_tpl_pth, 'rb') as i_fh:
-            with open(local_tpl_out_pth, 'wb') as o_fh:
-                o_fh.write(read_render_tpl("local.%s.tpl" % kind, params))
-                o_fh.flush()
-                instance.machine.upload(local_tpl_out_pth,
-                                        "/home/stack/devstack/local.conf")
+                                         "local.%s.conf" % server.name)
+        with open(local_tpl_out_pth, 'wb') as o_fh:
+            contents = read_render_tpl("local.%s.tpl" % kind, params)
+            o_fh.write(contents)
+            if not contents.endswith("\n"):
+                o_fh.write("\n")
+            o_fh.flush()
+            server.machine.upload(local_tpl_out_pth,
+                                  "/home/stack/devstack/local.conf")
 
 
 def read_render_tpl(template_name, params):
@@ -176,36 +190,32 @@ def read_render_tpl(template_name, params):
         return utils.render_tpl(i_fh.read(), params)
 
 
-def setup_pass_cfg(args):
+def setup_settings(args):
     # Ensure all needed (to-be-used) passwords exist and have a value.
-    if args.passwords:
+    needs_write = False
+    if args.settings:
         try:
-            with open(args.passwords, "rb") as fh:
-                pass_cfg = ConfigParser()
-                pass_cfg.readfp(fh, filename=fh.name)
+            settings = utils.BashConf()
+            settings.read(args.settings)
         except IOError as e:
             if e.errno == errno.ENOENT:
-                pass_cfg = ConfigParser()
+                settings = utils.BashConf()
+                needs_write = True
             else:
                 raise
     else:
-        pass_cfg = ConfigParser()
-    needs_write = False
-    if not pass_cfg.has_section('passwords'):
-        pass_cfg.add_section('passwords')
-        needs_write = True
-    for pw_name in PASSES:
-        if pass_cfg.has_option("passwords", pw_name):
-            pw = pass_cfg.get("passwords", pw_name)
-            if pw:
-                continue
-        pass_cfg.set('passwords', pw_name, utils.generate_pass())
-        needs_write = True
+        settings = utils.BashConf()
+    for pw_name in ['ADMIN_PASSWORD', 'SERVICE_PASSWORD',
+                    'SERVICE_TOKEN', 'RABBIT_PASSWORD']:
+        try:
+            settings[pw_name]
+        except KeyError:
+            pw = utils.generate_pass()
+            settings[pw_name] = pw
+            needs_write = True
     if needs_write:
-        with open(args.passwords, "wb") as fh:
-            pass_cfg.write(fh)
-        needs_write = False
-    return pass_cfg
+        settings.write(args.settings)
+    return settings
 
 
 def transform(args, cloud, tracker, servers):
@@ -213,7 +223,7 @@ def transform(args, cloud, tracker, servers):
     tracker.call_and_mark(clone_devstack,
                           args, cloud, servers)
     tracker.call_and_mark(create_local_files,
-                          args, cloud, servers, setup_pass_cfg(args))
+                          args, cloud, servers, setup_settings(args))
     tracker.call_and_mark(run_stack,
                           args, cloud, tracker, servers)
 
@@ -253,7 +263,14 @@ def create(args, cloud, tracker):
             raise RuntimeError("Can not create '%s' instances without"
                                " matching flavor '%s'" % (kind, kind_flv))
         flavors[kind] = flv
-    ud = read_render_tpl("ud.tpl", {})
+    # Ensure this is ready and waiting...
+    utils.safe_make_dir(args.scratch_dir)
+    # Someday make this better?
+    ud_params = {
+        'USER': 'stack',
+        'USER_PW': 'stack',
+    }
+    ud = read_render_tpl("ud.tpl", ud_params)
     print("Spawning the following instances in availability zone: %s" % az)
     topo = {}
     pretty_topo = {}
@@ -330,7 +347,6 @@ def create(args, cloud, tracker):
             else:
                 print("Instance spawn underway.")
     # Wait for them to actually become active...
-    servers_and_ip = {}
     print("Waiting for instances to become ACTIVE, please wait...")
     for kind, server in servers.items():
         sys.stdout.write("  Waiting for instance %s " % server.name)
@@ -341,35 +357,31 @@ def create(args, cloud, tracker):
         if not server_ip:
             raise RuntimeError("Instance %s spawned but no ip"
                                " was found associated" % server.name)
-        servers_and_ip[kind] = (server, server_ip)
+        server['ip'] = server_ip
+        servers[kind] = server
     # Validate that we can connect into them.
     print("Validating connectivity using %s threads,"
-          " please wait..." % len(servers_and_ip))
+          " please wait..." % len(servers))
     futs = []
-    with futures.ThreadPoolExecutor(max_workers=len(servers_and_ip)) as ex:
-        for kind, (server, server_ip) in servers_and_ip.items():
+    with futures.ThreadPoolExecutor(max_workers=len(servers)) as ex:
+        for kind, server in servers.items():
             fut = ex.submit(utils.ssh_connect,
-                            server_ip, indent="  ",
+                            server.ip, indent="  ",
                             user='stack', password='stack',
                             server_name=server.name)
-            instance = munch.Munch({
-                'server': server,
-                'server_ip': server_ip,
-                'kind': kind,
-            })
-            futs.append((fut, instance))
+            futs.append((fut, kind, server))
     try:
         # Reform with the futures results...
         servers = {}
-        for fut, instance in futs:
-            instance.machine = fut.result()
-            servers[instance.kind] = instance
+        for fut, kind, server in futs:
+            server.machine = fut.result()
+            servers[kind] = server
         # Now turn those into something useful...
         transform(args, cloud, tracker, servers)
     finally:
         # Ensure all machines opened (without error) are now closed.
         while futs:
-            fut = futs.pop()
+            fut, _kind, server = futs.pop()
             try:
                 machine = fut.result()
             except Exception:
@@ -380,5 +392,4 @@ def create(args, cloud, tracker):
                 except Exception:
                     LOG.exception("Failed closing ssh machine opened"
                                   " to server %s at %s",
-                                  fut.details['server'].name,
-                                  fut.details['server_ip'])
+                                  server.name, server.ip)
