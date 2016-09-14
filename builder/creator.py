@@ -14,16 +14,16 @@ import plumbum
 from builder import pprint
 from builder import utils
 
-PASSES = [
-    'ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'SERVICE_TOKEN',
-    'RABBIT_PASSWORD',
-]
 DEF_USER, DEF_PW = ('stack', 'stack')
-DEFAULT_PASSWORDS = {
+DEFAULT_SETTINGS = {
     # We can't seem to alter this one more than once,
     # so just leave it as is... todo fix this and make it so that
     # we reset it...
+    'DATABASE_USER': 'root',
+    # This may require work...
     'DATABASE_PASSWORD': 'stack',
+    # This appears to be the default, leave it be...
+    'RABBIT_USER': 'stackrabbit',
 }
 DEV_TOPO = tuple([
     ('cap', '%(user)s-cap-%(rand)s'),
@@ -161,7 +161,7 @@ def run_stack(args, cloud, tracker, servers):
 def create_local_files(args, cloud, servers, settings):
     """Creates and uploads all local.conf files for devstack."""
     params = {}
-    params.update(DEFAULT_PASSWORDS)
+    params.update(DEFAULT_SETTINGS)
     params.update(settings.itervars())
     # This needs to be done so that servers that will not have rabbit
     # or the database on them (but need to access it will still have
@@ -204,6 +204,7 @@ def setup_settings(args):
                 raise
     else:
         settings = utils.BashConf()
+    # Use or create these settings...
     for pw_name in ['ADMIN_PASSWORD', 'SERVICE_PASSWORD',
                     'SERVICE_TOKEN', 'RABBIT_PASSWORD']:
         try:
