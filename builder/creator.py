@@ -173,6 +173,25 @@ def clone_devstack(args, cloud, servers):
         sys.stdout.write("(OK) \n")
 
 
+def prep_stack(args, cloud, tracker, servers):
+    """Preps the various servers (in the right order)."""
+    for kind in ['map', 'cap', 'hv']:
+        server = servers[kind]
+        yum = server.machine['yum']
+        sudo = server.machine['sudo']
+        yum = sudo[yum]
+        # We need to get the mariadb package (the client) installed
+        # so that future runs of stack.sh which will not install the
+        # mariadb-server will be able to interact with the database,
+        #
+        # Otherwise it ends badly at stack.sh run-time... (may be something
+        # we can fix in devstack?)
+        utils.run_and_record(
+            os.path.join(args.scratch_dir, "%s.yum" % server.hostname),
+            cmd, "-y", "install", 'mariadb',
+            indent="  ", server_name=server.hostname)
+
+
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
     # Order matters here.
@@ -285,6 +304,8 @@ def bind_hostnames(servers):
 
 def transform(args, cloud, tracker, servers):
     """Turn (mostly) raw servers into useful things."""
+    tracker.call_and_mark(prep_stack,
+                          args, cloud, servers)
     tracker.call_and_mark(clone_devstack,
                           args, cloud, servers)
     tracker.call_and_mark(create_local_files,
