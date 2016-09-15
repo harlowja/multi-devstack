@@ -25,6 +25,9 @@ ENABLE_DEBUG_LOG_LEVEL=true
 USE_VENV=true
 DATABASE_TYPE=mysql
 
+# For now use this driver, switch to PyMySQL later...
+MYSQL_DRIVER=MySQL-python
+
 ENABLED_SERVICES=key,glance,nova
 ENABLED_SERVICES+=,n-cell,n-cell-region
 DISABLED_SERVICE+=,n-cpu,n-net,n-sch,n-api-meta,n-obj,n-novnc,n-xvnc,n-spice

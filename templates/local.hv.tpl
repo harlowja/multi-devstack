@@ -27,6 +27,9 @@ DATABASE_TYPE=mysql
 VIRT_DRIVER=libvirt
 LIBVIRT_TYPE=qemu
 
+# For now use this driver, switch to PyMySQL later...
+MYSQL_DRIVER=MySQL-python
+
 ENABLED_SERVICES=nova
 ENABLED_SERVICES+=n-api-meta,n-cpu
 DISABLED_SERVICE+=,n-net,n-sch,n-cell,n-api,n-obj,n-novnc,n-xvnc,n-spice
