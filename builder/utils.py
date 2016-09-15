@@ -68,7 +68,7 @@ def trim_it(block, max_len, reverse=False):
 
 
 def run_and_record(remote_cmds, indent="",
-                   err_chop_len=256, max_workers=None):
+                   err_chop_len=1024, max_workers=None):
     def cmd_runner(remote_cmd, stdout_fh, stderr_fh):
         cmd = remote_cmd.cmd
         cmd_args = remote_cmd.cmd_args
@@ -121,11 +121,12 @@ def run_and_record(remote_cmds, indent="",
                                                         fut_exc.retcode))
                 buf.write("%s    Argv: %s\n" % (indent, fut_exc.argv))
                 buf.write("%s    Stdout:\n" % (indent))
-                stdout = trim_it(fut_exc.stdout, err_chop_len)
+                # The end is typically where the error is...
+                stdout = trim_it(fut_exc.stdout, err_chop_len, reverse=True)
                 for line in stdout.splitlines():
                     buf.write("%s      %s\n" % (indent, line))
                 buf.write("%s    Stderr:\n" % (indent))
-                stderr = trim_it(fut_exc.stderr, err_chop_len)
+                stderr = trim_it(fut_exc.stderr, err_chop_len, reverse=True)
                 for line in stderr.splitlines():
                     buf.write("%s      %s\n" % (indent, line))
             else:
