@@ -26,11 +26,18 @@ from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 PASS_CHARS = string.ascii_lowercase + string.digits
 
 
-def trim_it(block, max_len):
+def trim_it(block, max_len, reverse=False):
     block_len = len(block)
-    block = block[0:max_len]
-    if block_len > max_len:
-        block += " (and %sb more)" % (block_len - max_len)
+    if not reverse:
+        block = block[0:max_len]
+        if block_len > max_len:
+            block += " (and %sb more)" % (block_len - max_len)
+    else:
+        block = "".join(list(reversed(block)))
+        block = block[0:max_len]
+        block = "".join(list(reversed(block)))
+        if block_len > max_len:
+            block += " (and %sb prior)" % (block_len - max_len)
     return block
 
 

@@ -12,6 +12,7 @@ from concurrent import futures
 from distutils.version import LooseVersion
 
 import plumbum
+import six
 
 from builder import pprint
 from builder import utils
@@ -161,9 +162,9 @@ def run_stack(args, cloud, tracker, servers):
             # recording there full output to files anyway).
             exc_info = sys.exc_info()
             try:
-                e.stderr = utils.trim_it(e.stderr, 128)
-                e.stdout = utils.trim_it(e.stdout, 128)
-                raise exc_info
+                e.stderr = utils.trim_it(e.stderr, 128, reverse=True)
+                e.stdout = utils.trim_it(e.stdout, 128, reverse=True)
+                six.reraise(*exc_info)
             finally:
                 del exc_info
 
