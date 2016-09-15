@@ -138,6 +138,8 @@ def clone_devstack(args, cloud, servers):
     for kind, server in servers.items():
         sys.stdout.write("  Cloning devstack in"
                          " server %s " % server.name)
+        rm = server.machine["rm"]
+        rm("-rf", "devstack")
         git = server.machine['git']
         git("clone", "git://git.openstack.org/openstack-dev/devstack")
         git('checkout', args.branch, cwd="devstack")
