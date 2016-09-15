@@ -24,9 +24,12 @@ DEFAULT_SETTINGS = {
     # We can't seem to alter this one more than once,
     # so just leave it as is... todo fix this and make it so that
     # we reset it...
-    'DATABASE_USER': 'root',
+    'DATABASE_USER': DEF_USER,
+    # Devstack will also change the root database password to this,
+    # unsure why it desires to do that...
+    #
     # This may require work...
-    'DATABASE_PASSWORD': 'stack',
+    'DATABASE_PASSWORD': DEF_PW,
     # This appears to be the default, leave it be...
     'RABBIT_USER': 'stackrabbit',
 }
@@ -171,8 +174,8 @@ def create_local_files(args, cloud, servers, settings):
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
     params.update({
-        'DATABASE_HOST': servers['db'].ip,
-        'RABBIT_HOST': servers['rb'].ip,
+        'DATABASE_HOST': servers['db'].hostname,
+        'RABBIT_HOST': servers['rb'].hostname,
     })
     for kind, server in servers.items():
         local_tpl_out_pth = os.path.join(args.scratch_dir,
@@ -199,7 +202,7 @@ def setup_settings(args):
         needs_write = False
         for val_name in val_names:
             try:
-                val = cfg.get_option(section_name, val_name)
+                val = cfg.get(section_name, val_name)
             except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
                 if not cfg.has_section(section_name):
                     cfg.add_section(section_name)
@@ -237,6 +240,16 @@ def setup_settings(args):
         with open(args.settings, 'wb') as fh:
             cfg.write(fh)
     return settings
+
+
+def bind_hostnames(servers):
+    print("Determining full hostnames of servers, please wait...")
+    for kind, server in servers.items():
+        hostname_cmd = server.machine['hostname']
+        hostname = hostname_cmd("-f")
+        hostname = hostname.strip()
+        server.hostname = hostname
+        print("  Resolved %s to %s" % (server.name, hostname))
 
 
 def transform(args, cloud, tracker, servers):
@@ -397,6 +410,7 @@ def create(args, cloud, tracker):
             server.machine = fut.result()
             servers[kind] = server
         # Now turn those into something useful...
+        bind_hostnames(servers)
         transform(args, cloud, tracker, servers)
     finally:
         # Ensure all machines opened (without error) are now closed.
