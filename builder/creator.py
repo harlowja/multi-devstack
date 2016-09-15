@@ -150,7 +150,7 @@ def clone_devstack(args, cloud, servers):
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
     # Order matters here.
-    for kind in ['db', 'rb', 'map']:
+    for kind in ['db', 'rb', 'map', 'cap', 'hv']:
         server = servers[kind]
         cmd = server.machine['/home/stack/devstack/stack.sh']
         try:
