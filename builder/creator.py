@@ -238,19 +238,13 @@ def create_local_files(args, cloud, servers, settings):
         local_tpl_out_pth = os.path.join(args.scratch_dir,
                                          "local.%s.conf" % server.hostname)
         with open(local_tpl_out_pth, 'wb') as o_fh:
-            contents = read_render_tpl("local.%s.tpl" % kind, params)
+            contents = utils.render_tpl("local.%s.tpl" % kind, params)
             o_fh.write(contents)
             if not contents.endswith("\n"):
                 o_fh.write("\n")
             o_fh.flush()
             server.machine.upload(local_tpl_out_pth,
                                   "/home/stack/devstack/local.conf")
-
-
-def read_render_tpl(template_name, params):
-    template_path = os.path.join("templates", template_name)
-    with open(template_path, "rb") as i_fh:
-        return utils.render_tpl(i_fh.read(), params)
 
 
 def setup_settings(args):
@@ -365,7 +359,7 @@ def create(args, cloud, tracker):
         'USER': DEF_USER,
         'USER_PW': DEF_PW,
     }
-    ud = read_render_tpl("ud.tpl", ud_params)
+    ud = utils.render_tpl("ud.tpl", ud_params)
     print("Spawning the following instances in availability zone:")
     topo = {}
     pretty_topo = {}

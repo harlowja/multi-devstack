@@ -1,6 +1,5 @@
 plumbum
 shade
-yaml
 paramiko
 monotonic
 futures

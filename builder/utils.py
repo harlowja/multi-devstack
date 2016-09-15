@@ -22,7 +22,6 @@ from monotonic import monotonic as now
 import paramiko
 import plumbum
 import six
-import yaml
 
 from paramiko.common import DEBUG
 from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
@@ -225,13 +224,6 @@ def generate_secret(max_len=10):
     return "".join(random.choice(PASS_CHARS) for _i in xrange(0, max_len))
 
 
-def prettify_yaml(obj):
-    formatted = yaml.dump(obj, line_break="\n",
-                          indent=4, explicit_start=True,
-                          explicit_end=True, default_flow_style=False)
-    return formatted
-
-
 def read_file(path, mode='rb', default=''):
     try:
         with open(path, mode) as fh:
@@ -254,9 +246,11 @@ def safe_make_dir(a_dir):
     return a_dir
 
 
-def render_tpl(content, params):
-    return Template(content, undefined=jinja2.StrictUndefined,
-                    trim_blocks=True).render(**params)
+def render_tpl(template_name, params):
+    env = jinja2.Environment(undefined=jinja2.StrictUndefined,
+                             loader=jinja2.FileSystemLoader("templates"))
+    tpl = env.get_template(template_name)
+    return tpl.render(**params)
 
 
 def ssh_connect(ip, connect_timeout=1.0,
