@@ -14,7 +14,6 @@ import time
 
 from concurrent import futures
 import contextlib2
-import jinja2
 import munch
 
 from monotonic import monotonic as now
