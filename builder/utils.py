@@ -51,8 +51,8 @@ def run_and_record(base_record_path, cmd, *cmd_args, **kwargs):
     stdout_path = "%s.stdout" % base_record_path
     with open(stderr_path, 'wb') as stderr_fh:
         with open(stdout_path, 'wb') as stdout_fh:
-            print("%s  Output file (stderr): %s" % (indent, stderr_fh.name))
             print("%s  Output file (stdout): %s" % (indent, stdout_fh.name))
+            print("%s  Output file (stderr): %s" % (indent, stderr_fh.name))
             for stdout, stderr in cmd.popen(*cmd_args).iter_lines():
                 if stdout:
                     print(stdout, file=stdout_fh)

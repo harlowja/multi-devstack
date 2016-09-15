@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     # This appears to be the default, leave it be...
     'RABBIT_USER': 'stackrabbit',
 }
+STACK_CONSOLE_EXC_LIMIT = 256
 DEV_TOPO = tuple([
     ('cap', '%(user)s-cap-%(rand)s'),
     ('map', '%(user)s-map-%(rand)s'),
@@ -123,22 +124,46 @@ def get_server_ip(server):
     return ip
 
 
-def az_sorter(az1, az2):
-    if 'cor' in az1 and 'cor' not in az2:
-        return 1
-    if 'cor' in az1 and 'cor' in az2:
-        return 0
-    if 'cor' not in az1 and 'cor' in az2:
-        return -1
-    if 'cor' not in az1 and 'cor' not in az2:
-        return 0
+def make_az_selector(azs):
+
+    def az_selector():
+        cor_azs = []
+        mgt_azs = []
+        gen_azs = []
+        prd_azs = []
+        other_azs = []
+        for az in azs:
+            if 'cor' in az:
+                cor_azs.append(az)
+            elif 'gen' in az:
+                gen_azs.append(az)
+            elif 'prd' in az:
+                prd_azs.append(az)
+            elif 'mgt' in az:
+                mgt_azs.append(az)
+            else:
+                other_azs.append(az)
+        pick_order = [
+            cor_azs,
+            mgt_azs,
+            gen_azs,
+            prd_azs,
+            other_azs,
+        ]
+        for p in pick_order:
+            if not p:
+                continue
+            else:
+                return random.choice(p)
+
+    return az_selector
 
 
 def clone_devstack(args, cloud, servers):
     """Clears prior devstack and clones devstack + adjusts branch."""
     for kind, server in servers.items():
         sys.stdout.write("  Cloning devstack in"
-                         " server %s " % server.name)
+                         " server %s " % server.hostname)
         rm = server.machine["rm"]
         rm("-rf", "devstack")
         git = server.machine['git']
@@ -155,15 +180,17 @@ def run_stack(args, cloud, tracker, servers):
         cmd = server.machine['/home/stack/devstack/stack.sh']
         try:
             utils.run_and_record(
-                os.path.join(args.scratch_dir, "%s.stack" % server.name),
-                cmd, indent="  ", server_name=server.name)
+                os.path.join(args.scratch_dir, "%s.stack" % server.hostname),
+                cmd, indent="  ", server_name=server.hostname)
         except plumbum.ProcessExecutionError as e:
             # These get way to big (trim them down, as we are already
             # recording there full output to files anyway).
             exc_info = sys.exc_info()
             try:
-                e.stderr = utils.trim_it(e.stderr, 128, reverse=True)
-                e.stdout = utils.trim_it(e.stdout, 128, reverse=True)
+                e.stderr = utils.trim_it(
+                    e.stderr, STACK_CONSOLE_EXC_LIMIT, reverse=True)
+                e.stdout = utils.trim_it(
+                    e.stdout, STACK_CONSOLE_EXC_LIMIT, reverse=True)
                 six.reraise(*exc_info)
             finally:
                 del exc_info
@@ -182,7 +209,7 @@ def create_local_files(args, cloud, servers, settings):
     })
     for kind, server in servers.items():
         local_tpl_out_pth = os.path.join(args.scratch_dir,
-                                         "local.%s.conf" % server.name)
+                                         "local.%s.conf" % server.hostname)
         with open(local_tpl_out_pth, 'wb') as o_fh:
             contents = read_render_tpl("local.%s.tpl" % kind, params)
             o_fh.write(contents)
@@ -274,15 +301,19 @@ def create(args, cloud, tracker):
     # TODO(harlowja): why can't we list details?
     azs = [az.zoneName
            for az in nc.availability_zones.list(detailed=False)]
+    if not azs:
+        raise RuntimeError(
+                "Can not create instances in a cloud with no"
+                " availability zones")
     if args.availability_zone:
         if args.availability_zone not in azs:
             raise RuntimeError(
                 "Can not create instances in unknown"
                 " availability zone '%s'" % args.availability_zone)
         az = args.availability_zone
+        az_selector = lambda: args.availability_zone
     else:
-        azs = sorted(azs, cmp=az_sorter, reverse=True)
-        az = azs[0]
+        az_selector = make_az_selector(azs)
     if args.image:
         image = cloud.get_image(args.image)
         if not image:
@@ -326,7 +357,7 @@ def create(args, cloud, tracker):
                 'name': name,
                 'flavor': flavors[kind],
                 'image': image,
-                'availability_zone': az,
+                'availability_zone': az_selector(),
                 'user_data': ud,
             }
             pretty_topo[kind] = {
