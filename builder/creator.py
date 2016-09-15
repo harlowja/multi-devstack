@@ -11,9 +11,6 @@ import sys
 from concurrent import futures
 from distutils.version import LooseVersion
 
-import plumbum
-import six
-
 from builder import pprint
 from builder import utils
 
@@ -34,7 +31,6 @@ DEFAULT_SETTINGS = {
     # This appears to be the default, leave it be...
     'RABBIT_USER': 'stackrabbit',
 }
-STACK_CONSOLE_EXC_LIMIT = 256
 DEV_TOPO = tuple([
     ('cap', '%(user)s-cap-%(rand)s'),
     ('map', '%(user)s-map-%(rand)s'),
@@ -173,47 +169,53 @@ def clone_devstack(args, cloud, servers):
         sys.stdout.write("(OK) \n")
 
 
-def prep_stack(args, cloud, tracker, servers):
-    """Preps the various servers (in the right order)."""
+def install_some_packages(args, cloud, servers):
+    """Installs a few prerequisite packages on the various servers."""
+    remote_cmds = []
     for kind in ['map', 'cap', 'hv']:
         server = servers[kind]
-        yum = server.machine['yum']
         sudo = server.machine['sudo']
-        yum = sudo[yum]
+        yum = sudo[server.machine['yum']]
         # We need to get the mariadb package (the client) installed
         # so that future runs of stack.sh which will not install the
         # mariadb-server will be able to interact with the database,
         #
-        # Otherwise it ends badly at stack.sh run-time... (may be something
+        # Otherwise it ends badly at stack.sh run-time... (maybe something
         # we can fix in devstack?)
-        utils.run_and_record(
-            os.path.join(args.scratch_dir, "%s.yum" % server.hostname),
-            cmd, "-y", "install", 'mariadb',
-            indent="  ", server_name=server.hostname)
+        record_path = os.path.join(
+            args.scratch_dir, "%s.yum_install" % (server.hostname))
+        remote_cmds.append(
+            utils.RemoteCommand(
+                yum, "-y", "install", 'mariadb',
+                record_path=record_path,
+                server_name=server.hostname))
+    utils.run_and_record(remote_cmds)
 
 
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
-    # Order matters here.
-    for kind in ['db', 'rb', 'map', 'cap', 'hv']:
+    # We can run these in parallel.
+    remote_cmds = []
+    for kind in ['db', 'rb']:
         server = servers[kind]
         cmd = server.machine['/home/stack/devstack/stack.sh']
-        try:
-            utils.run_and_record(
-                os.path.join(args.scratch_dir, "%s.stack" % server.hostname),
-                cmd, indent="  ", server_name=server.hostname)
-        except plumbum.ProcessExecutionError as e:
-            # These get way to big (trim them down, as we are already
-            # recording there full output to files anyway).
-            exc_info = sys.exc_info()
-            try:
-                e.stderr = utils.trim_it(
-                    e.stderr, STACK_CONSOLE_EXC_LIMIT, reverse=True)
-                e.stdout = utils.trim_it(
-                    e.stdout, STACK_CONSOLE_EXC_LIMIT, reverse=True)
-                six.reraise(*exc_info)
-            finally:
-                del exc_info
+        record_path = os.path.join(args.scratch_dir,
+                                   "%s.stack" % server.hostname)
+        remote_cmds.append(
+            utils.RemoteCommand(cmd, record_path=record_path,
+                                server_name=server.hostname))
+    utils.run_and_record(remote_cmds)
+    remote_cmds = []
+    # Order matters here; so we can't run in parallel...
+    for kind in ['map', 'cap', 'hv']:
+        server = servers[kind]
+        cmd = server.machine['/home/stack/devstack/stack.sh']
+        record_path = os.path.join(args.scratch_dir,
+                                   "%s.stack" % server.hostname)
+        utils.run_and_record([
+            utils.RemoteCommand(cmd, record_path=record_path,
+                                server_name=server.hostname)
+        ])
 
 
 def create_local_files(args, cloud, servers, settings):
@@ -304,7 +306,7 @@ def bind_hostnames(servers):
 
 def transform(args, cloud, tracker, servers):
     """Turn (mostly) raw servers into useful things."""
-    tracker.call_and_mark(prep_stack,
+    tracker.call_and_mark(install_some_packages,
                           args, cloud, servers)
     tracker.call_and_mark(clone_devstack,
                           args, cloud, servers)
@@ -332,7 +334,6 @@ def create(args, cloud, tracker):
             raise RuntimeError(
                 "Can not create instances in unknown"
                 " availability zone '%s'" % args.availability_zone)
-        az = args.availability_zone
         az_selector = lambda: args.availability_zone
     else:
         az_selector = make_az_selector(azs)
@@ -374,12 +375,13 @@ def create(args, cloud, tracker):
                 'user': cloud.auth['username'],
                 'rand': random.randrange(1, 99),
             }
+            az = az_selector()
             name = name_tpl % name_tpl_vals
             topo[kind] = {
                 'name': name,
                 'flavor': flavors[kind],
                 'image': image,
-                'availability_zone': az_selector(),
+                'availability_zone': az,
                 'user_data': ud,
             }
             pretty_topo[kind] = {

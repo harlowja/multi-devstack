@@ -7,3 +7,4 @@ futures
 fasteners
 jinja2
 six
+contextlib2

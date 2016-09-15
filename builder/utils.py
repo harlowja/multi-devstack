@@ -4,6 +4,7 @@ from binascii import hexlify
 from datetime import datetime
 
 import errno
+import functools
 import json
 import os
 import random
@@ -11,6 +12,8 @@ import socket
 import string
 import time
 
+from concurrent import futures
+import contextlib2
 import jinja2
 from jinja2 import Template
 import munch
@@ -18,12 +21,35 @@ import munch
 from monotonic import monotonic as now
 import paramiko
 import plumbum
+import six
 import yaml
 
 from paramiko.common import DEBUG
 from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 
 PASS_CHARS = string.ascii_lowercase + string.digits
+
+
+class RemoteExecutionFailed(Exception):
+    pass
+
+
+class RemoteCommand(object):
+    def __init__(self, cmd, *cmd_args, **kwargs):
+        self.cmd = cmd
+        self.cmd_args = cmd_args
+        record_path = kwargs.get('record_path')
+        if record_path:
+            self.stdout_record_path = "%s.stdout" % record_path
+            self.stderr_record_path = "%s.stderr" % record_path
+        else:
+            self.stdout_record_path = os.devnull
+            self.stderr_record_path = os.devnull
+        server_name = kwargs.get('server_name')
+        if server_name:
+            self.server_name = server_name
+        else:
+            self.server_name = cmd.machine.host
 
 
 def trim_it(block, max_len, reverse=False):
@@ -41,25 +67,69 @@ def trim_it(block, max_len, reverse=False):
     return block
 
 
-def run_and_record(base_record_path, cmd, *cmd_args, **kwargs):
-    indent = kwargs.get('indent', '')
-    display_name = kwargs.get('server_name', cmd.machine.host)
-    print("%sRunning '%s' on server"
-          " %s, please wait..." % (indent, " ".join(cmd.formulate()),
-                                   display_name))
-    stderr_path = "%s.stderr" % base_record_path
-    stdout_path = "%s.stdout" % base_record_path
-    with open(stderr_path, 'wb') as stderr_fh:
-        with open(stdout_path, 'wb') as stdout_fh:
-            print("%s  Output file (stdout): %s" % (indent, stdout_fh.name))
-            print("%s  Output file (stderr): %s" % (indent, stderr_fh.name))
-            for stdout, stderr in cmd.popen(*cmd_args).iter_lines():
-                if stdout:
-                    print(stdout, file=stdout_fh)
-                    stdout_fh.flush()
-                if stderr:
-                    print(stderr, file=stderr_fh)
-                    stderr_fh.flush()
+def run_and_record(remote_cmds, indent="", err_chop_len=256):
+    def cmd_runner(remote_cmd, stdout_fh, stderr_fh):
+        cmd = remote_cmd.cmd
+        cmd_args = remote_cmd.cmd_args
+        for stdout, stderr in cmd.popen(cmd_args).iter_lines():
+            if stdout:
+                print(stdout, file=stdout_fh)
+                stdout_fh.flush()
+            if stderr:
+                print(stderr, file=stderr_fh)
+                stderr_fh.flush()
+    to_run = []
+    ran = []
+    with contextlib2.ExitStack() as e_stack:
+        for remote_cmd in remote_cmds:
+            cmd = remote_cmd.cmd
+            print("%sRunning '%s' on server"
+                  " %s, please wait..." % (indent,
+                                           " ".join(cmd.formulate()),
+                                           remote_cmd.server_name))
+            stderr_path = remote_cmd.stderr_record_path
+            stderr_fh = open(stderr_path, 'wb')
+            e_stack.callback(stderr_fh.close)
+            stdout_path = remote_cmd.stdout_record_path
+            stdout_fh = open(stdout_path, 'wb')
+            e_stack.callback(stdout_fh.close)
+            print("%s  Output file (stdout): %s" % (indent,
+                                                    stdout_fh.name))
+            print("%s  Output file (stderr): %s" % (indent,
+                                                    stderr_fh.name))
+            to_run.append((remote_cmd,
+                           functools.partial(cmd_runner, remote_cmd,
+                                             stdout_fh, stderr_fh)))
+        with futures.ThreadPoolExecutor(max_workers=len(to_run)) as ex:
+            for (remote_cmd, run_func) in to_run:
+                ran.append((remote_cmd, ex.submit(run_func)))
+    fails = 0
+    buf = six.StringIO()
+    for remote_cmd, fut in ran:
+        fut_exc = fut.exception()
+        if fut_exc is not None:
+            fails += 1
+            cmd = remote_cmd.cmd
+            buf.write("%sRunning remote cmd on %s failed:\n" % (
+                indent, remote_cmd.server_name))
+            if isinstance(fut_exc, plumbum.ProcessExecutionError):
+                buf.write("%s  Due to process execution error:\n" % indent)
+                buf.write("%s    Return/exit code: %s\n" % (indent,
+                                                        fut_exc.retcode))
+                buf.write("%s    Argv: %s\n" % (indent, fut_exc.argv))
+                buf.write("%s    Stdout:\n" % (indent))
+                stdout = trim_it(fut_exc.stdout, err_chop_len)
+                for line in stdout.splitlines():
+                    buf.write("%s      %s\n" % (indent, line))
+                buf.write("%s    Stderr:\n" % (indent))
+                stderr = trim_it(fut_exc.stderr, err_chop_len)
+                for line in stderr.splitlines():
+                    buf.write("%s      %s\n" % (indent, line))
+            else:
+                buf.write("Due to unknown cause: %s\n" % fut_exc)
+    if fails:
+        buf = buf.getvalue().rstrip()
+        raise RemoteExecutionFailed(buf)
 
 
 class Tracker(object):
@@ -144,7 +214,7 @@ class IgnoreMissingHostKeyPolicy(paramiko.MissingHostKeyPolicy):
         # to record these, since they will just keep on changing...
         # so just log a note when we get them....
         client._log(DEBUG, 'Ignoring %s host key for %s: %s' %
-            (key.get_name(), hostname, hexlify(key.get_fingerprint())))
+                    (key.get_name(), hostname, hexlify(key.get_fingerprint())))
 
 
 def generate_secret(max_len=10):
