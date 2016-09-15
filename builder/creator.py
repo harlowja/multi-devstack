@@ -238,7 +238,7 @@ def create_local_files(args, cloud, servers, settings):
         local_tpl_out_pth = os.path.join(args.scratch_dir,
                                          "local.%s.conf" % server.hostname)
         with open(local_tpl_out_pth, 'wb') as o_fh:
-            tpl = args.templates.get_template("local.%s.tpl" % kind)
+            tpl = args.templates("local.%s.tpl" % kind)
             contents = tpl.render(**params)
             o_fh.write(contents)
             if not contents.endswith("\n"):
@@ -360,7 +360,7 @@ def create(args, cloud, tracker):
         'USER': DEF_USER,
         'USER_PW': DEF_PW,
     }
-    ud_tpl = args.templates.get_template("ud.tpl")
+    ud_tpl = args.templates("ud.tpl")
     ud = ud_tpl.render(**ud_params)
     print("Spawning the following instances in availability zone:")
     topo = {}

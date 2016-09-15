@@ -63,9 +63,10 @@ def main():
         # No options provided...
         logging.basicConfig(level=logging.WARN)
 
+    # Make this into a convenience attribute for later usage...
     args.templates = jinja2.Environment(
         undefined=jinja2.StrictUndefined,
-        loader=jinja2.FileSystemLoader(args.templates))
+        loader=jinja2.FileSystemLoader(args.templates)).get_template
     one_at_a_time = fasteners.InterProcessLock(".run_lock")
     gotten = one_at_a_time.acquire(blocking=False)
     if not gotten:
