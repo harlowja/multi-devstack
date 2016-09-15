@@ -67,7 +67,8 @@ def trim_it(block, max_len, reverse=False):
     return block
 
 
-def run_and_record(remote_cmds, indent="", err_chop_len=256):
+def run_and_record(remote_cmds, indent="",
+                   err_chop_len=256, max_workers=None):
     def cmd_runner(remote_cmd, stdout_fh, stderr_fh):
         cmd = remote_cmd.cmd
         cmd_args = remote_cmd.cmd_args
@@ -100,7 +101,9 @@ def run_and_record(remote_cmds, indent="", err_chop_len=256):
             to_run.append((remote_cmd,
                            functools.partial(cmd_runner, remote_cmd,
                                              stdout_fh, stderr_fh)))
-        with futures.ThreadPoolExecutor(max_workers=len(to_run)) as ex:
+        if max_workers is None:
+            max_workers = len(to_run)
+        with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
             for (remote_cmd, run_func) in to_run:
                 ran.append((remote_cmd, ex.submit(run_func)))
     fails = 0
