@@ -245,13 +245,6 @@ def safe_make_dir(a_dir):
     return a_dir
 
 
-def render_tpl(template_name, params):
-    env = jinja2.Environment(undefined=jinja2.StrictUndefined,
-                             loader=jinja2.FileSystemLoader("templates"))
-    tpl = env.get_template(template_name)
-    return tpl.render(**params)
-
-
 def ssh_connect(ip, connect_timeout=1.0,
                 max_backoff=60, max_attempts=12, indent="",
                 user=None, password=None,

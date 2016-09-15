@@ -14,6 +14,7 @@ import os
 import sys
 
 import fasteners
+import jinja2
 import shade
 
 from builder import creator
@@ -35,6 +36,10 @@ def main():
                         help="file to read/write action tracking"
                              " information into/from (default=%(default)s)",
                         default=os.path.join(os.getcwd(), "tracker.log"),
+                        metavar="PATH")
+    parser.add_argument("--templates",
+                        help="templates directory (default=%(default)s)",
+                        default=os.path.join(os.getcwd(), "templates"),
                         metavar="PATH")
     parser.add_argument("-v", "--verbose",
                         help=("run in verbose mode (may be specified more"
@@ -58,6 +63,9 @@ def main():
         # No options provided...
         logging.basicConfig(level=logging.WARN)
 
+    args.templates = jinja2.Environment(
+        undefined=jinja2.StrictUndefined,
+        loader=jinja2.FileSystemLoader(args.templates))
     one_at_a_time = fasteners.InterProcessLock(".run_lock")
     gotten = one_at_a_time.acquire(blocking=False)
     if not gotten:
