@@ -118,7 +118,7 @@ def run_and_record(remote_cmds, indent="",
             if isinstance(fut_exc, plumbum.ProcessExecutionError):
                 buf.write("%s  Due to process execution error:\n" % indent)
                 buf.write("%s    Return/exit code: %s\n" % (indent,
-                                                        fut_exc.retcode))
+                                                            fut_exc.retcode))
                 buf.write("%s    Argv: %s\n" % (indent, fut_exc.argv))
                 buf.write("%s    Stdout:\n" % (indent))
                 # The end is typically where the error is...
