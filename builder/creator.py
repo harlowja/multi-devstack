@@ -366,7 +366,7 @@ def create(args, cloud, tracker):
         'USER_PW': DEF_PW,
     }
     ud = read_render_tpl("ud.tpl", ud_params)
-    print("Spawning the following instances in availability zone: %s" % az)
+    print("Spawning the following instances in availability zone:")
     topo = {}
     pretty_topo = {}
     # We may have already created it (aka, underway so use them if
