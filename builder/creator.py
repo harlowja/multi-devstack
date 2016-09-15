@@ -32,10 +32,15 @@ DEFAULT_SETTINGS = {
     'RABBIT_USER': 'stackrabbit',
 }
 DEV_TOPO = tuple([
+    # Cap servers are what we call child cells.
     ('cap', '%(user)s-cap-%(rand)s'),
+    # Map servers are the parent cell + glance + keystone + top level things.
     ('map', '%(user)s-map-%(rand)s'),
+    # Rabbit.
     ('rb', '%(user)s-rb-%(rand)s'),
+    # A hypervisor + n-cpu + n-api-meta
     ('hv', '%(user)s-hv-%(rand)s'),
+    # A database (mysql/mariadb).
     ('db', '%(user)s-db-%(rand)s'),
 ])
 DEV_FLAVORS = {
