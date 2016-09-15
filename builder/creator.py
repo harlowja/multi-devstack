@@ -143,14 +143,15 @@ def make_az_selector(azs):
                 mgt_azs.append(az)
             else:
                 other_azs.append(az)
-        pick_order = [
+        az_pick_order = [
+            # This vaguely matches what the cloud UI does...
             cor_azs,
-            mgt_azs,
             gen_azs,
+            mgt_azs,
             prd_azs,
             other_azs,
         ]
-        for p in pick_order:
+        for p in az_pick_order:
             if not p:
                 continue
             else:
