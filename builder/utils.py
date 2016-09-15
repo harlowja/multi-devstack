@@ -85,7 +85,7 @@ def run_and_record(remote_cmds, indent="",
         for remote_cmd in remote_cmds:
             cmd = remote_cmd.cmd
             print("%sRunning '%s' on server"
-                  " %s, please wait..." % (indent,
+                  " '%s', please wait..." % (indent,
                                            " ".join(cmd.formulate()),
                                            remote_cmd.server_name))
             stderr_path = remote_cmd.stderr_record_path
