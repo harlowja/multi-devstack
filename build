@@ -29,7 +29,7 @@ def main():
     parser.add_argument("--settings",
                         help="file to read/write settings"
                              " information into/from (default=%(default)s)",
-                        default=os.path.join(os.getcwd(), "settings.sh"),
+                        default=os.path.join(os.getcwd(), "settings.ini"),
                         metavar="PATH")
     parser.add_argument("--tracker",
                         help="file to read/write action tracking"

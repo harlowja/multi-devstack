@@ -1,5 +1,7 @@
 from __future__ import print_function
 
+import ConfigParser
+
 import errno
 import logging
 import os
@@ -142,7 +144,7 @@ def clone_devstack(args, cloud, servers):
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
     # Order matters here.
-    for kind in ['rb', 'map']:
+    for kind in ['db', 'rb', 'map']:
         server = servers[kind]
         cmd = server.machine['/home/stack/devstack/stack.sh']
         try:
@@ -163,9 +165,8 @@ def run_stack(args, cloud, tracker, servers):
 
 def create_local_files(args, cloud, servers, settings):
     """Creates and uploads all local.conf files for devstack."""
-    params = {}
-    params.update(DEFAULT_SETTINGS)
-    params.update(settings.itervars())
+    params = dict(DEFAULT_SETTINGS)
+    params.update(settings)
     # This needs to be done so that servers that will not have rabbit
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
@@ -193,31 +194,48 @@ def read_render_tpl(template_name, params):
 
 
 def setup_settings(args):
-    # Ensure all needed (to-be-used) passwords exist and have a value.
+    def fill_section(cfg, section_name, val_names, fill_in_func):
+        settings = {}
+        needs_write = False
+        for val_name in val_names:
+            try:
+                val = cfg.get_option(section_name, val_name)
+            except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+                if not cfg.has_section(section_name):
+                    cfg.add_section(section_name)
+                val = fill_in_func()
+                cfg.set(section_name, val_name, val)
+                needs_write = True
+            settings[val_name] = val
+        return (needs_write, settings)
+    # Ensure all needed (to-be-used) passwords/tokens exist and have a value.
+    cfg = ConfigParser.RawConfigParser()
     needs_write = False
     if args.settings:
         try:
-            settings = utils.BashConf()
-            settings.read(args.settings)
+            with open(args.settings, 'rb') as fh:
+                cfg.readfp(fh)
         except IOError as e:
             if e.errno == errno.ENOENT:
-                settings = utils.BashConf()
                 needs_write = True
             else:
                 raise
-    else:
-        settings = utils.BashConf()
-    # Use or create these settings...
-    for pw_name in ['ADMIN_PASSWORD', 'SERVICE_PASSWORD',
-                    'SERVICE_TOKEN', 'RABBIT_PASSWORD']:
-        try:
-            settings[pw_name]
-        except KeyError:
-            pw = utils.generate_pass()
-            settings[pw_name] = pw
-            needs_write = True
+    settings = {}
+    tmp_needs_write, tmp_settings = fill_section(
+        cfg, 'tokens', ['SERVICE_TOKEN'], utils.generate_secret)
+    if tmp_needs_write:
+        needs_write = True
+    settings.update(tmp_settings)
+    tmp_needs_write, tmp_settings = fill_section(
+        cfg, 'passwords',
+        ['ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'RABBIT_PASSWORD'],
+        utils.generate_secret)
+    if tmp_needs_write:
+        needs_write = True
+    settings.update(tmp_settings)
     if needs_write:
-        settings.write(args.settings)
+        with open(args.settings, 'wb') as fh:
+            cfg.write(fh)
     return settings
 
 
