@@ -245,7 +245,8 @@ def upload_extras(args, cloud, servers):
             print("Uploading %s extras.d file/s to"
                   " %s, please wait..." % (len(file_names), server.hostname))
             for file_name in file_names:
-                target_path = "/home/stack/devstack/extras.d/%s" % file_name
+                target_path = "/home/%s/devstack/extras.d/%s" % (DEF_USER,
+                                                                 file_name)
                 local_path = os.path.join(extras_path, file_name)
                 sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
                                                                 target_path))
