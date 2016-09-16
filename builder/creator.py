@@ -101,6 +101,12 @@ def bind_subparser(subparsers):
                                      " directory (default=%(default)s)"),
                                default=os.path.join(os.getcwd(), "extras.d"),
                                metavar="PATH")
+    parser_create.add_argument("--source",
+                               help=("git url of"
+                                     " devstack (default=%(default)s"),
+                               default=("git://git.openstack.org/"
+                                        "openstack-dev/devstack"),
+                               metavar="URL")
     parser_create.set_defaults(func=create)
     return parser_create
 
@@ -188,13 +194,16 @@ def make_az_selector(azs):
 
 def clone_devstack(args, cloud, servers):
     """Clears prior devstack and clones devstack + adjusts branch."""
+    print("Cloning devstack.")
+    print("  From: %s" % args.source)
+    print("  Branch: %s" % args.branch)
+    print("Please wait...")
     for kind, server in servers.items():
-        sys.stdout.write("  Cloning devstack in"
-                         " server %s " % server.hostname)
+        sys.stdout.write("  Executing on %s " % server.hostname)
         rm = server.machine["rm"]
         rm("-rf", "devstack")
         git = server.machine['git']
-        git("clone", "git://git.openstack.org/openstack-dev/devstack")
+        git("clone", args.source)
         git('checkout', args.branch, cwd="devstack")
         sys.stdout.write("(OK) \n")
 
@@ -244,20 +253,8 @@ def upload_extras(args, cloud, servers):
 
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
-    # We can run these in parallel.
-    remote_cmds = []
-    for kind in ['db', 'rb']:
-        server = servers[kind]
-        cmd = server.machine['/home/stack/devstack/stack.sh']
-        record_path = os.path.join(args.scratch_dir,
-                                   "%s.stack" % server.hostname)
-        remote_cmds.append(
-            utils.RemoteCommand(cmd, record_path=record_path,
-                                server_name=server.hostname))
-    utils.run_and_record(remote_cmds)
-    remote_cmds = []
-    # Order matters here; so we can't run in parallel...
-    for kind in ['map', 'cap', 'hv']:
+    # Order matters here...
+    for kind in ['rb', 'map', 'cap', 'hv']:
         server = servers[kind]
         cmd = server.machine['/home/stack/devstack/stack.sh']
         record_path = os.path.join(args.scratch_dir,
