@@ -48,9 +48,9 @@ DEV_TOPO = tuple([
 ])
 DEV_FLAVORS = {
     'cap': 'm1.medium',
-    'map': 'm1.large',
+    'map': 'm1.xlarge',
     'rb': 'm1.medium',
-    'hv': 'm1.large',
+    'hv': 'm1.xlarge',
 }
 LOG = logging.getLogger(__name__)
 
