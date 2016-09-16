@@ -194,11 +194,10 @@ def make_az_selector(azs):
 
 def clone_devstack(args, cloud, servers):
     """Clears prior devstack and clones devstack + adjusts branch."""
-    print("Cloning devstack.")
-    print("  From: %s" % args.source)
-    print("  Branch: %s" % args.branch)
+    print("Cloning devstack (from %s)" % (args.source))
     for kind, server in servers.items():
-        sys.stdout.write("Cloning in %s " % server.hostname)
+        sys.stdout.write("  Cloning devstack in %s " % (server.hostname))
+        sys.stdout.flush()
         rm = server.machine["rm"]
         rm("-rf", "devstack")
         git = server.machine['git']
