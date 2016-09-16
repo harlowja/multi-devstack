@@ -1,0 +1,11 @@
+[prod_centos_7_x86_64_openstack]
+name=Openstack repo
+baseurl=https://yum.secureserver.net/repos/prod/centos/7/x86_64/openstack
+enabled=1
+gpgcheck=0
+
+[prod_centos_7_x86_64_openstack_liberty]
+name=Openstack liberty repo
+baseurl=https://yum.secureserver.net/repos/prod/centos/7/x86_64/openstack-liberty
+enabled=1
+gpgcheck=0

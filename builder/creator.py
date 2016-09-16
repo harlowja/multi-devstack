@@ -9,6 +9,7 @@ import random
 import sys
 
 from concurrent import futures
+from propeller import propeller
 
 import jinja2
 
@@ -103,6 +104,11 @@ def bind_subparser(subparsers):
                                      " directory (default=%(default)s)"),
                                default=os.path.join(os.getcwd(), "extras.d"),
                                metavar="PATH")
+    parser_create.add_argument("--repos",
+                               help=("repos.d"
+                                     " directory (default=%(default)s)"),
+                               default=os.path.join(os.getcwd(), "repos.d"),
+                               metavar="PATH")
     parser_create.add_argument("--source",
                                help=("git url of"
                                      " devstack (default=%(default)s"),
@@ -127,11 +133,18 @@ def create_meta(cloud):
     }
 
 
+def prop_maker(msg=None):
+    return propeller(msg=msg,
+                     ops=False, eta=False, percent=False,
+                     spinner='circle_halfs')
+
+
 def get_server_ip(server):
-    ip = server.get('private_v4')
-    if not ip:
-        ip = server.get('accessIPv4')
-    return ip
+    for field in ['private_v4', 'accessIPv4']:
+        ip = server.get(field)
+        if ip:
+            return ip
+    return None
 
 
 def make_az_selector(azs):
@@ -175,14 +188,12 @@ def clone_devstack(args, cloud, servers):
     """Clears prior devstack and clones devstack + adjusts branch."""
     print("Cloning devstack (from %s)" % (args.source))
     for kind, server in servers.items():
-        sys.stdout.write("  Cloning devstack in %s " % (server.hostname))
-        sys.stdout.flush()
-        rm = server.machine["rm"]
-        rm("-rf", "devstack")
-        git = server.machine['git']
-        git("clone", args.source)
-        git('checkout', args.branch, cwd="devstack")
-        sys.stdout.write("(OK)\n")
+        with prop_maker(msg="  Cloning devstack in %s " % (server.hostname)):
+            rm = server.machine["rm"]
+            rm("-rf", "devstack")
+            git = server.machine['git']
+            git("clone", args.source)
+            git('checkout', args.branch, cwd="devstack")
 
 
 def install_some_packages(args, cloud, servers):
@@ -192,20 +203,64 @@ def install_some_packages(args, cloud, servers):
         server = servers[kind]
         sudo = server.machine['sudo']
         yum = sudo[server.machine['yum']]
-        # We need to get the mariadb package (the client) installed
-        # so that future runs of stack.sh which will not install the
-        # mariadb-server will be able to interact with the database,
-        #
-        # Otherwise it ends badly at stack.sh run-time... (maybe something
-        # we can fix in devstack?)
         record_path = os.path.join(
             args.scratch_dir, "%s.yum_install" % (server.hostname))
         remote_cmds.append(
             utils.RemoteCommand(
-                yum, "-y", "install", 'mariadb',
+                yum, "-y", "install",
+                # We need to get the mariadb package (the client) installed
+                # so that future runs of stack.sh which will not install the
+                # mariadb-server will be able to interact with the database,
+                #
+                # Otherwise it ends badly at stack.sh run-time... (maybe
+                # something we can fix in devstack?)
+                'mariadb',
                 record_path=record_path,
                 server_name=server.hostname))
     utils.run_and_record(remote_cmds)
+    for kind in ['hv']:
+        server = servers[kind]
+        sudo = server.machine['sudo']
+        yum = sudo[server.machine['yum']]
+        service = sudo[server.machine['service']]
+        record_path = os.path.join(
+            args.scratch_dir, "%s.yum_install" % (server.hostname))
+        utils.run_and_record([
+            utils.RemoteCommand(
+                yum, "-y", "install",
+                # This is mainly for the hypervisors, but installing it
+                # everywhere shouldn't hurt.
+                'openvswitch',
+                record_path=record_path,
+                server_name=server.hostname)
+        ])
+        service('openvswitch', 'restart')
+
+
+def upload_repos(args, cloud, servers):
+    """Uploads all repos.d files into corresponding repos.d directory."""
+    repos_path = os.path.abspath(args.repos)
+    for (kind, server) in servers.items():
+        file_names = [file_name
+                      for file_name in os.listdir(repos_path)
+                      if file_name.endswith(".repo")]
+        if file_names:
+            print("Uploading %s repos.d file/s to"
+                  " %s, please wait..." % (len(file_names), server.hostname))
+            for file_name in file_names:
+                target_path = "/etc/yum.repos.d/%s" % (file_name)
+                tpm_path = "/tmp/%s" % (file_name)
+                local_path = os.path.join(repos_path, file_name)
+                sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
+                                                                target_path))
+                sys.stdout.flush()
+                server.machine.upload(local_path, tpm_path)
+                sudo = server.machine['sudo']
+                mv = sudo[server.machine['mv']]
+                mv(tpm_path, target_path)
+                yum = sudo[server.machine['yum']]
+                yum('clean', 'all')
+                sys.stdout.write("(OK)\n")
 
 
 def upload_extras(args, cloud, servers):
@@ -251,7 +306,7 @@ def run_stack(args, cloud, tracker, servers):
         times = utils.run_and_record([
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname)
-        ])
+        ], wait_maker=prop_maker)
         run_time_min = times[0] / 60.0
         if run_time_min > 20:
             print("WARNING: devstack run took > 20 minutes, %s"
@@ -351,6 +406,8 @@ def bind_hostnames(servers):
 
 def transform(args, cloud, tracker, servers):
     """Turn (mostly) raw servers into useful things."""
+    tracker.call_and_mark(upload_repos,
+                          args, cloud, servers)
     tracker.call_and_mark(install_some_packages,
                           args, cloud, servers)
     tracker.call_and_mark(clone_devstack,
@@ -489,16 +546,14 @@ def create(args, cloud, tracker):
     # Wait for them to actually become active...
     print("Waiting for instances to become ACTIVE, please wait...")
     for kind, server in servers.items():
-        sys.stdout.write("  Waiting for instance %s " % server.name)
-        sys.stdout.flush()
-        server = cloud.wait_for_server(server, auto_ip=False)
-        sys.stdout.write("(OK)\n")
-        server_ip = get_server_ip(server)
-        if not server_ip:
-            raise RuntimeError("Instance %s spawned but no ip"
-                               " was found associated" % server.name)
-        server['ip'] = server_ip
-        servers[kind] = server
+        with prop_maker(msg="  Waiting for instance %s " % server.name):
+            server = cloud.wait_for_server(server, auto_ip=False)
+            server_ip = get_server_ip(server)
+            if not server_ip:
+                raise RuntimeError("Instance %s spawned but no ip"
+                                   " was found associated" % server.name)
+            server['ip'] = server_ip
+            servers[kind] = server
     # Validate that we can connect into them.
     print("Validating connectivity using %s threads,"
           " please wait..." % len(servers))

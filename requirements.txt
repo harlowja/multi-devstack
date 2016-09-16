@@ -7,3 +7,5 @@ fasteners
 jinja2
 six
 contextlib2
+enum34
+python-propeller

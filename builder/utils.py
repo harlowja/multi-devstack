@@ -65,7 +65,8 @@ def trim_it(block, max_len, reverse=False):
 
 
 def run_and_record(remote_cmds, indent="",
-                   err_chop_len=1024, max_workers=None):
+                   err_chop_len=1024, max_workers=None,
+                   wait_maker=None):
     def cmd_runner(remote_cmd, stdout_fh, stderr_fh):
         cmd = remote_cmd.cmd
         cmd_args = remote_cmd.cmd_args
@@ -83,15 +84,19 @@ def run_and_record(remote_cmds, indent="",
     with contextlib2.ExitStack() as e_stack:
         for remote_cmd in remote_cmds:
             cmd = remote_cmd.cmd
+            pretty_cmd = " ".join(cmd.formulate())
+            if remote_cmd.cmd_args:
+                pretty_cmd += " "
+                pretty_cmd += " ".join([str(a) for a in remote_cmd.cmd_args])
             print("%sRunning '%s' on server"
                   " '%s', please wait..." % (indent,
-                                             " ".join(cmd.formulate()),
+                                             pretty_cmd,
                                              remote_cmd.server_name))
             stderr_path = remote_cmd.stderr_record_path
-            stderr_fh = open(stderr_path, 'wb')
+            stderr_fh = open(stderr_path, 'a+b')
             e_stack.callback(stderr_fh.close)
             stdout_path = remote_cmd.stdout_record_path
-            stdout_fh = open(stdout_path, 'wb')
+            stdout_fh = open(stdout_path, 'a+b')
             e_stack.callback(stdout_fh.close)
             for (kind, filename) in [('stdout', stdout_fh.name),
                                      ('stderr', stderr_fh.name)]:
@@ -102,9 +107,16 @@ def run_and_record(remote_cmds, indent="",
                                              stdout_fh, stderr_fh)))
         if max_workers is None:
             max_workers = len(to_run)
-        with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-            for (remote_cmd, run_func) in to_run:
-                ran.append((remote_cmd, ex.submit(run_func)))
+        if wait_maker is not None:
+            wait_cm = wait_maker()
+            with wait_cm:
+                with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+                    for (remote_cmd, run_func) in to_run:
+                        ran.append((remote_cmd, ex.submit(run_func)))
+        else:
+            with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+                for (remote_cmd, run_func) in to_run:
+                    ran.append((remote_cmd, ex.submit(run_func)))
     fails = 0
     fail_buf = six.StringIO()
     times = []
