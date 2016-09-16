@@ -36,18 +36,16 @@ DEFAULT_SETTINGS = {
 DEV_TOPO = tuple([
     # Cap servers are what we call child cells.
     ('cap', '%(user)s-cap-%(rand)s'),
-    # Map servers are the parent cell + glance + keystone + top level things.
+    # Map servers are the parent cell + glance + keystone + top level things,
+    # as well as a database (mariadb)
     ('map', '%(user)s-map-%(rand)s'),
     # Rabbit.
     ('rb', '%(user)s-rb-%(rand)s'),
     # A hypervisor + n-cpu + n-api-meta
     ('hv', '%(user)s-hv-%(rand)s'),
-    # A database (mysql/mariadb).
-    ('db', '%(user)s-db-%(rand)s'),
 ])
 DEV_FLAVORS = {
     'cap': 'm1.medium',
-    'db': 'm1.medium',
     'map': 'm1.large',
     'rb': 'm1.medium',
     'hv': 'm1.large',
