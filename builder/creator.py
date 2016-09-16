@@ -218,7 +218,8 @@ def upload_extras(args, cloud, servers):
     """Uploads all extras.d files into corresponding devstack directory."""
     extras_path = os.path.abspath(args.extras)
     for (kind, server) in servers.items():
-        file_names = [file_name in os.listdir(extras_path)
+        file_names = [file_name 
+                      for file_name in os.listdir(extras_path)
                       if file_name.endswith(".sh")]
         if file_names:
             print("Uploading %s extras.d files to"
