@@ -22,9 +22,4 @@ LOG_COLOR=False
 SCREEN_LOGDIR=/opt/stack/logs
 ENABLE_DEBUG_LOG_LEVEL=true
 
-# This seems to be a bug, in that its not installing it, so ensure
-# it is by setting this...
-ADDITIONAL_VENV_PACKAGES="PyMySQL"
-USE_VENV=true
-
 GIT_BASE=${GIT_BASE:-https://git.openstack.org}
