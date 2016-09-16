@@ -527,7 +527,7 @@ def create(args, cloud, tracker):
         for kind, server in servers.items():
             fut = ex.submit(utils.ssh_connect,
                             server.ip, indent="  ",
-                            user='stack', password='stack',
+                            user=DEF_USER, password=DEF_PW,
                             server_name=server.name)
             futs.append((fut, kind, server))
     try:
