@@ -263,7 +263,7 @@ def run_stack(args, cloud, tracker, servers):
     finder = lambda r: r.kind == 'stacked'
     stacked_done = dict((r.server_kind, r.server_hostname)
                         for r in tracker.search_last_using(finder))
-    stack_sh = '/home/stack/devstack/stack.sh'
+    stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
     for kind in ['rb', 'map', 'cap', 'hv']:
         server = servers[kind]
         if kind in stacked_done and stacked_done[kind] == server.hostname:
