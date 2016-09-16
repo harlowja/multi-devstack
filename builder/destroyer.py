@@ -6,7 +6,7 @@ import shutil
 
 def bind_subparser(subparsers):
     parser_destroy = subparsers.add_parser('destroy')
-    parser_destroy.add_argument("--no-backup",
+    parser_destroy.add_argument("--backup",
                                 action='store_true', default=False,
                                 help="Backup the action log (that may exist)"
                                      " after destruction")
@@ -33,7 +33,7 @@ def destroy(args, cloud, tracker):
             cloud.delete_server(server, wait=True)
             tracker.record({'kind': 'server_destroy', 'name': server})
         tracker.close()
-        if args.no_backup:
+        if not args.backup:
             os.unlink(tracker.path)
         else:
             backup_path = "%s.bak" % tracker.path

@@ -60,6 +60,13 @@ def bind_subparser(subparsers):
                                     " use (if not provided one will"
                                     " automatically be found)",
                                default=None)
+    parser_create.add_argument("--settings",
+                               help=("file to read/write settings"
+                                     " information"
+                                     " into/from (default=%(default)s)"),
+                               default=os.path.join(os.getcwd(),
+                                                    "settings.ini"),
+                               metavar="PATH")
     parser_create.add_argument("-a", "--availability-zone",
                                help="explicit availability"
                                     " to use (if not provided one will"
@@ -76,6 +83,16 @@ def bind_subparser(subparsers):
                                help="cmd output and/or scratch"
                                     " directory (default=%(default)s)",
                                default=os.path.join(os.getcwd(), "scratch"))
+    parser_create.add_argument("-t", "--templates",
+                               help=("templates"
+                                     " directory (default=%(default)s)"),
+                               default=os.path.join(os.getcwd(), "templates"),
+                               metavar="PATH")
+    parser_create.add_argument("-e", "--extras",
+                               help=("extras.d"
+                                     " directory (default=%(default)s)"),
+                               default=os.path.join(os.getcwd(), "extras.d"),
+                               metavar="PATH")
     parser_create.set_defaults(func=create)
     return parser_create
 
@@ -197,6 +214,22 @@ def install_some_packages(args, cloud, servers):
     utils.run_and_record(remote_cmds)
 
 
+def upload_extras(args, cloud, servers):
+    """Uploads all extras.d files into corresponding devstack directory."""
+    extras_path = os.path.abspath(args.extras)
+    for (kind, server) in servers.items():
+        file_names = [file_name in os.listdir(extras_path)
+                      if file_name.endswith(".sh")]
+        if file_names:
+            print("Uploading %s extras.d files to"
+                  " %s, please wait..." % (len(file_names), server.hostname))
+            for file_name in file_names:
+                target_path = "/home/stack/devstack/extras.d/%s" % file_name
+                local_path = os.path.join(extras_path, file_name)
+                server.machine.upload(local_path, target_path)
+                print("  Uploaded %s => %s" % (local_path, target_path))
+
+
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
     # We can run these in parallel.
@@ -309,6 +342,8 @@ def transform(args, cloud, tracker, servers):
     tracker.call_and_mark(install_some_packages,
                           args, cloud, servers)
     tracker.call_and_mark(clone_devstack,
+                          args, cloud, servers)
+    tracker.call_and_mark(upload_extras,
                           args, cloud, servers)
     tracker.call_and_mark(create_local_files,
                           args, cloud, servers, setup_settings(args))
