@@ -58,8 +58,8 @@ LOG = logging.getLogger(__name__)
 def post_process_args(args):
     if hasattr(args, 'templates'):
         args.templates = jinja2.Environment(
-        undefined=jinja2.StrictUndefined,
-        loader=jinja2.FileSystemLoader(args.templates)).get_template
+            undefined=jinja2.StrictUndefined,
+            loader=jinja2.FileSystemLoader(args.templates)).get_template
     return args
 
 
