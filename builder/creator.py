@@ -9,10 +9,10 @@ import random
 import sys
 
 from concurrent import futures
-from distutils.version import LooseVersion
 
 import jinja2
 
+from builder import images
 from builder import pprint
 from builder import utils
 
@@ -125,32 +125,6 @@ def create_meta(cloud):
         # fix needed...
         'disable_pbis': 'true',
     }
-
-
-def find_cent7_image(cloud, match_group='CentOS 7'):
-    """Tries to find the centos7 images given a cloud instance."""
-    images = cloud.list_images()
-    possible_images = []
-    for image in images:
-        try:
-            if image['group'] != match_group or \
-               image.get('protected') or image['status'] != 'active':
-                continue
-            if image['os.spec'].startswith("CentOS Linux release 7") \
-               and image['os.family'] == 'linux' \
-               and image['name'].startswith("centos7-base"):
-                possible_images.append(image)
-        except KeyError:
-            pass
-    if not possible_images:
-        return None
-    else:
-        image_by_names = {img.name: img for img in possible_images}
-        image_by_names_ver = sorted(
-            # This will do good enough, until we can figure out what the
-            # actual naming scheme is here...
-            [LooseVersion(img.name) for img in possible_images], reverse=True)
-        return image_by_names[str(image_by_names_ver[0])]
 
 
 def get_server_ip(server):
@@ -416,10 +390,11 @@ def create(args, cloud, tracker):
             raise RuntimeError("Can not create instances with unknown"
                                " source image '%s'" % args.image)
     else:
-        image = find_cent7_image(cloud)
+        image_kind = images.ImageKind.CENT7
+        image = images.find_image(cloud, image_kind)
         if not image:
             raise RuntimeError("Can not create instances (unable to"
-                               " locate a cent7.x source image)")
+                               " locate a %s source image)" % image_kind.name)
     flavors = {}
     for kind, kind_flv in DEV_FLAVORS.items():
         flv = cloud.get_flavor(kind_flv)
