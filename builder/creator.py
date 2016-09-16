@@ -268,16 +268,20 @@ def run_stack(args, cloud, tracker, servers):
     for kind in ['rb', 'map', 'cap', 'hv']:
         server = servers[kind]
         if kind in stacked_done and stacked_done[kind] == server.hostname:
-            print("Already finished"
+            print("Already (previously) finished"
                   " running '%s' on %s" % (stack_sh, server.hostname))
             continue
         cmd = server.machine[stack_sh]
         record_path = os.path.join(args.scratch_dir,
                                    "%s.stack" % server.hostname)
-        utils.run_and_record([
+        times = utils.run_and_record([
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname)
         ])
+        run_time_min = times[0] / 60.0
+        if run_time_min > 20:
+            print("WARNING: devstack run took > 20 minutes, %s"
+                  " is a very slow node..." % server.hostname)
         tracker.record({'kind': 'stacked',
                         'server_hostname': server.hostname,
                         'server_kind': kind})
@@ -293,6 +297,7 @@ def create_local_files(args, cloud, servers, settings):
     params.update({
         'DATABASE_HOST': servers['map'].hostname,
         'RABBIT_HOST': servers['rb'].hostname,
+        'RELEASE': args.branch,
     })
     target_path = "/home/%s/devstack/local.conf" % DEF_USER
     for kind, server in servers.items():
