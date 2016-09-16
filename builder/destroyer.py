@@ -4,6 +4,10 @@ import os
 import shutil
 
 
+def post_process_args(args):
+    return args
+
+
 def bind_subparser(subparsers):
     parser_destroy = subparsers.add_parser('destroy')
     parser_destroy.add_argument("--backup",

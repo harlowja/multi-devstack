@@ -14,7 +14,6 @@ import os
 import sys
 
 import fasteners
-import jinja2
 import shade
 
 from builder import creator
@@ -42,6 +41,8 @@ def main():
     creator.bind_subparser(subparsers)
 
     args = parser.parse_args()
+    args = creator.post_process_args(args)
+    args = destroyer.post_process_args(args)
     if args.verbose == 1:
         logging.basicConfig(level=logging.INFO)
     elif args.verbose == 2:
@@ -54,10 +55,6 @@ def main():
         # No options provided...
         logging.basicConfig(level=logging.WARN)
 
-    # Make this into a convenience attribute for later usage...
-    args.templates = jinja2.Environment(
-        undefined=jinja2.StrictUndefined,
-        loader=jinja2.FileSystemLoader(args.templates)).get_template
     one_at_a_time = fasteners.InterProcessLock(".run_lock")
     gotten = one_at_a_time.acquire(blocking=False)
     if not gotten:
