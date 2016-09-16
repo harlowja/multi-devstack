@@ -37,7 +37,9 @@ DEV_TOPO = tuple([
     # Cap servers are what we call child cells.
     ('cap', '%(user)s-cap-%(rand)s'),
     # Map servers are the parent cell + glance + keystone + top level things,
-    # as well as a database (mariadb)
+    # as well as a database (mariadb); in the future we can hopefully
+    # split off the db, but there is a odd interaction between nova
+    # api and the database that requires it to be on the same node.
     ('map', '%(user)s-map-%(rand)s'),
     # Rabbit.
     ('rb', '%(user)s-rb-%(rand)s'),
@@ -112,6 +114,7 @@ def bind_subparser(subparsers):
 
 
 def create_meta(cloud):
+    """Makes godaddy specific nova metadata."""
     return {
         "login_users": "DC1\\%s" % cloud.auth['username'],
         "login_groups": "DC1\\ac_devcloud",
@@ -125,6 +128,7 @@ def create_meta(cloud):
 
 
 def find_cent7_image(cloud, match_group='CentOS 7'):
+    """Tries to find the centos7 images given a cloud instance."""
     images = cloud.list_images()
     possible_images = []
     for image in images:
@@ -157,6 +161,7 @@ def get_server_ip(server):
 
 
 def make_az_selector(azs):
+    """Picks a az the best it can (given a list of azs)."""
 
     def az_selector():
         cor_azs = []
