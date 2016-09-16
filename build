@@ -12,10 +12,12 @@ import collections
 import logging
 import os
 import sys
+import traceback
 
 import fasteners
 import shade
 
+from builder import cows
 from builder import creator
 from builder import destroyer
 from builder import pprint
@@ -82,8 +84,14 @@ def main():
                 args.func(args, cloud, tracker)
             finally:
                 tracker.close()
+            cows.goodbye(True)
+            sys.exit(0)
         finally:
             one_at_a_time.release()
+        except Exception:
+            traceback.print_exc()
+            cows.goodbye(False)
+            sys.exit(1)
 
 
 if __name__ == '__main__':
