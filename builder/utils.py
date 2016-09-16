@@ -91,10 +91,10 @@ def run_and_record(remote_cmds, indent="",
             stdout_path = remote_cmd.stdout_record_path
             stdout_fh = open(stdout_path, 'wb')
             e_stack.callback(stdout_fh.close)
-            print("%s  Output file (stdout): %s" % (indent,
-                                                    stdout_fh.name))
-            print("%s  Output file (stderr): %s" % (indent,
-                                                    stderr_fh.name))
+            for (kind, filename) in [('stdout', stdout_fh.name),
+                                     ('stderr', stderr_fh.name)]:
+                print("%s  For watching %s (in real-time)"
+                      " run: `tail -f %s`" % (indent, kind, filename))
             to_run.append((remote_cmd,
                            functools.partial(cmd_runner, remote_cmd,
                                              stdout_fh, stderr_fh)))
