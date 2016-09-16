@@ -19,8 +19,10 @@ if [ $? -ne 0 ]; then
 fi
 echo "$tobe_user_pw" | passwd --stdin "$tobe_user"
 
-cat > /etc/sudoers.d/99-$tobe_user << EOF
+sudo_fn="99_sudo_${tobe_user}"
+cat > /etc/sudoers.d/$sudo_fn << EOF
 # Automatically generated at slave creation time.
+#
 # Do not edit.
 $tobe_user ALL=(ALL) NOPASSWD:ALL
 EOF
