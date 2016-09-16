@@ -133,7 +133,7 @@ def run_and_record(remote_cmds, indent="",
         else:
             times.append(fut.result())
     if fails:
-        buf = buf.getvalue().rstrip()
+        fail_buf = fail_buf.getvalue().rstrip()
         raise RemoteExecutionFailed(buf)
     return times
 
