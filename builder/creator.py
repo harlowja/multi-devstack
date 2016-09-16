@@ -279,18 +279,24 @@ def create_local_files(args, cloud, servers, settings):
         'DATABASE_HOST': servers['map'].hostname,
         'RABBIT_HOST': servers['rb'].hostname,
     })
+    target_path = "/home/stack/devstack/local.conf"
     for kind, server in servers.items():
-        local_tpl_out_pth = os.path.join(args.scratch_dir,
-                                         "local.%s.conf" % server.hostname)
-        with open(local_tpl_out_pth, 'wb') as o_fh:
+        print("Uploading local.conf to"
+              " %s, please wait..." % (server.hostname))
+        local_path = os.path.join(args.scratch_dir,
+                                  "local.%s.conf" % server.hostname)
+        with open(local_path, 'wb') as o_fh:
             tpl = args.templates("local.%s.tpl" % kind)
             contents = tpl.render(**params)
             o_fh.write(contents)
             if not contents.endswith("\n"):
                 o_fh.write("\n")
             o_fh.flush()
-            server.machine.upload(local_tpl_out_pth,
-                                  "/home/stack/devstack/local.conf")
+            sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
+                                                            target_path))
+            sys.stdout.flush()
+            server.machine.upload(local_path, target_path)
+            sys.stdout.write("(OK)\n")
 
 
 def setup_settings(args):
