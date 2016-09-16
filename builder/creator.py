@@ -260,15 +260,17 @@ def run_stack(args, cloud, tracker, servers):
     #
     # We may have already done it (aka, underway so use them if
     # we have done that).
-    stacked_done = dict((r.server_kind, r.server)
-                        for r in tracker.search_last_using(
-                            lambda r: r.kind == 'stacked'))
+    finder = lambda r: r.kind == 'stacked'
+    stacked_done = dict((r.server_kind, r.server_hostname)
+                        for r in tracker.search_last_using(finder))
+    stack_sh = '/home/stack/devstack/stack.sh'
     for kind in ['rb', 'map', 'cap', 'hv']:
         server = servers[kind]
-        if kind in stacked_done:
-            print("Already finished running stack.sh on %s" % server.hostname)
+        if kind in stacked_done and stacked_done[kind] == server.hostname:
+            print("Already finished"
+                  " running '%s' on %s" % (stack_sh, server.hostname))
             continue
-        cmd = server.machine['/home/stack/devstack/stack.sh']
+        cmd = server.machine[stack_sh]
         record_path = os.path.join(args.scratch_dir,
                                    "%s.stack" % server.hostname)
         utils.run_and_record([
@@ -276,7 +278,8 @@ def run_stack(args, cloud, tracker, servers):
                                 server_name=server.hostname)
         ])
         tracker.record({'kind': 'stacked',
-                        'server': server, 'server_kind': kind})
+                        'server_hostname': server.hostname,
+                        'server_kind': kind})
 
 
 def create_local_files(args, cloud, servers, settings):
