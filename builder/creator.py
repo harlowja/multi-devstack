@@ -257,8 +257,17 @@ def upload_extras(args, cloud, servers):
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
     # Order matters here...
+    #
+    # We may have already done it (aka, underway so use them if
+    # we have done that).
+    stacked_done = dict((r.server_kind, r.server)
+                        for r in tracker.search_last_using(
+                            lambda r: r.kind == 'stacked'))
     for kind in ['rb', 'map', 'cap', 'hv']:
         server = servers[kind]
+        if kind in stacked_done:
+            print("Already finished running stack.sh on %s" % server.hostname)
+            continue
         cmd = server.machine['/home/stack/devstack/stack.sh']
         record_path = os.path.join(args.scratch_dir,
                                    "%s.stack" % server.hostname)
@@ -266,6 +275,8 @@ def run_stack(args, cloud, tracker, servers):
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname)
         ])
+        tracker.record({'kind': 'stacked',
+                        'server': server, 'server_kind': kind})
 
 
 def create_local_files(args, cloud, servers, settings):
