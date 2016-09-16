@@ -125,12 +125,12 @@ def find_cent7_image(cloud, match_group='CentOS 7'):
     possible_images = []
     for image in images:
         try:
-            if (image['group'] != match_group or
-                image.get('protected') or image['status'] != 'active'):
+            if image['group'] != match_group or \
+               image.get('protected') or image['status'] != 'active':
                 continue
-            if (image['os.spec'].startswith("CentOS Linux release 7")
-                and image['os.family'] == 'linux'
-                and image['name'].startswith("centos7-base")):
+            if image['os.spec'].startswith("CentOS Linux release 7") \
+               and image['os.family'] == 'linux' \
+               and image['name'].startswith("centos7-base"):
                 possible_images.append(image)
         except KeyError:
             pass
@@ -228,7 +228,7 @@ def upload_extras(args, cloud, servers):
     """Uploads all extras.d files into corresponding devstack directory."""
     extras_path = os.path.abspath(args.extras)
     for (kind, server) in servers.items():
-        file_names = [file_name 
+        file_names = [file_name
                       for file_name in os.listdir(extras_path)
                       if file_name.endswith(".sh")]
         if file_names:
@@ -417,7 +417,7 @@ def create(args, cloud, tracker):
     # We may have already created it (aka, underway so use them if
     # we have done that).
     pre_creates = dict((r.server_kind, r.server_details)
-                        for r in tracker.search_last_using(
+                       for r in tracker.search_last_using(
                             lambda r: r.kind == 'server_pre_create'))
     for kind, name_tpl in DEV_TOPO:
         if kind not in pre_creates:
@@ -457,7 +457,7 @@ def create(args, cloud, tracker):
     # Only create things we have not already created (or that was
     # destroyed partially...)
     creates = dict((r.server.name, r.server)
-                    for r in tracker.search_last_using(
+                   for r in tracker.search_last_using(
                         lambda r: r.kind == 'server_create'))
     destroys = set(r.name
                    for r in tracker.search_last_using(
