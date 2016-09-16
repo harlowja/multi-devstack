@@ -185,6 +185,7 @@ class Tracker(object):
         if not matches:
             result = func(*args, **kwargs)
             self.record({'kind': kind, 'result': result})
+            print("Step has finished.")
             return result
         else:
             return matches[-1]['result']
