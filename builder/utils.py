@@ -188,6 +188,7 @@ class Tracker(object):
             print("Step has finished.")
             return result
         else:
+            print("Step has finished.")
             return matches[-1]['result']
 
     def search_last_using(self, matcher):
