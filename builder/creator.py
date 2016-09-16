@@ -293,7 +293,7 @@ def create_local_files(args, cloud, servers, settings):
         'DATABASE_HOST': servers['map'].hostname,
         'RABBIT_HOST': servers['rb'].hostname,
     })
-    target_path = "/home/stack/devstack/local.conf"
+    target_path = "/home/%s/devstack/local.conf" % DEF_USER
     for kind, server in servers.items():
         print("Uploading local.conf to"
               " %s, please wait..." % (server.hostname))
