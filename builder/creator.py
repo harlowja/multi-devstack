@@ -197,15 +197,14 @@ def clone_devstack(args, cloud, servers):
     print("Cloning devstack.")
     print("  From: %s" % args.source)
     print("  Branch: %s" % args.branch)
-    print("Please wait...")
     for kind, server in servers.items():
-        sys.stdout.write("  Executing on %s " % server.hostname)
+        sys.stdout.write("Cloning in %s " % server.hostname)
         rm = server.machine["rm"]
         rm("-rf", "devstack")
         git = server.machine['git']
         git("clone", args.source)
         git('checkout', args.branch, cwd="devstack")
-        sys.stdout.write("(OK) \n")
+        sys.stdout.write("(OK)\n")
 
 
 def install_some_packages(args, cloud, servers):
@@ -273,7 +272,7 @@ def create_local_files(args, cloud, servers, settings):
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
     params.update({
-        'DATABASE_HOST': servers['db'].hostname,
+        'DATABASE_HOST': servers['map'].hostname,
         'RABBIT_HOST': servers['rb'].hostname,
     })
     for kind, server in servers.items():
