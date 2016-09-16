@@ -110,22 +110,21 @@ def run_and_record(remote_cmds, indent="",
         if fut_exc is not None:
             fails += 1
             cmd = remote_cmd.cmd
-            buf.write("%sRunning remote cmd on %s failed:\n" % (
-                indent, remote_cmd.server_name))
+            buf.write("Running remote cmd on"
+                      " '%s' failed:\n" % (remote_cmd.server_name))
             if isinstance(fut_exc, plumbum.ProcessExecutionError):
-                buf.write("%s  Due to process execution error:\n" % indent)
-                buf.write("%s    Return/exit code: %s\n" % (indent,
-                                                            fut_exc.retcode))
-                buf.write("%s    Argv: %s\n" % (indent, fut_exc.argv))
-                buf.write("%s    Stdout:\n" % (indent))
+                buf.write("  Due to process execution error:\n")
+                buf.write("    Return/exit code: %s\n" % (fut_exc.retcode))
+                buf.write("    Argv: %s\n" % (fut_exc.argv))
+                buf.write("    Stdout:\n")
                 # The end is typically where the error is...
                 stdout = trim_it(fut_exc.stdout, err_chop_len, reverse=True)
                 for line in stdout.splitlines():
-                    buf.write("%s      %s\n" % (indent, line))
-                buf.write("%s    Stderr:\n" % (indent))
+                    buf.write("      %s\n" % (line))
+                buf.write("    Stderr:\n")
                 stderr = trim_it(fut_exc.stderr, err_chop_len, reverse=True)
                 for line in stderr.splitlines():
-                    buf.write("%s      %s\n" % (indent, line))
+                    buf.write("      %s\n" % (line))
             else:
                 buf.write("Due to unknown cause: %s\n" % fut_exc)
     if fails:
