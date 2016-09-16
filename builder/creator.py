@@ -232,7 +232,7 @@ def upload_extras(args, cloud, servers):
                       for file_name in os.listdir(extras_path)
                       if file_name.endswith(".sh")]
         if file_names:
-            print("Uploading %s extras.d files to"
+            print("Uploading %s extras.d file/s to"
                   " %s, please wait..." % (len(file_names), server.hostname))
             for file_name in file_names:
                 target_path = "/home/stack/devstack/extras.d/%s" % file_name
