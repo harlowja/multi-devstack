@@ -69,6 +69,7 @@ def run_and_record(remote_cmds, indent="",
     def cmd_runner(remote_cmd, stdout_fh, stderr_fh):
         cmd = remote_cmd.cmd
         cmd_args = remote_cmd.cmd_args
+        t_start = now()
         for stdout, stderr in cmd.popen(cmd_args).iter_lines():
             if stdout:
                 print(stdout, file=stdout_fh)
@@ -76,6 +77,7 @@ def run_and_record(remote_cmds, indent="",
             if stderr:
                 print(stderr, file=stderr_fh)
                 stderr_fh.flush()
+        return (now() - t_start)
     to_run = []
     ran = []
     with contextlib2.ExitStack() as e_stack:
@@ -104,32 +106,36 @@ def run_and_record(remote_cmds, indent="",
             for (remote_cmd, run_func) in to_run:
                 ran.append((remote_cmd, ex.submit(run_func)))
     fails = 0
-    buf = six.StringIO()
+    fail_buf = six.StringIO()
+    times = []
     for remote_cmd, fut in ran:
         fut_exc = fut.exception()
         if fut_exc is not None:
             fails += 1
             cmd = remote_cmd.cmd
-            buf.write("Running remote cmd on"
-                      " '%s' failed:\n" % (remote_cmd.server_name))
+            fail_buf.write("Running remote cmd on"
+                           " '%s' failed:\n" % (remote_cmd.server_name))
             if isinstance(fut_exc, plumbum.ProcessExecutionError):
-                buf.write("  Due to process execution error:\n")
-                buf.write("    Return/exit code: %s\n" % (fut_exc.retcode))
-                buf.write("    Argv: %s\n" % (fut_exc.argv))
-                buf.write("    Stdout:\n")
+                fail_buf.write("  Due to process execution error:\n")
+                fail_buf.write("    Return/exit code: %s\n" % (fut_exc.retcode))
+                fail_buf.write("    Argv: %s\n" % (fut_exc.argv))
+                fail_buf.write("    Stdout:\n")
                 # The end is typically where the error is...
                 stdout = trim_it(fut_exc.stdout, err_chop_len, reverse=True)
                 for line in stdout.splitlines():
-                    buf.write("      %s\n" % (line))
-                buf.write("    Stderr:\n")
+                    fail_buf.write("      %s\n" % (line))
+                fail_buf.write("    Stderr:\n")
                 stderr = trim_it(fut_exc.stderr, err_chop_len, reverse=True)
                 for line in stderr.splitlines():
-                    buf.write("      %s\n" % (line))
+                    fail_buf.write("      %s\n" % (line))
             else:
-                buf.write("Due to unknown cause: %s\n" % fut_exc)
+                fail_buf.write("Due to unknown cause: %s\n" % fut_exc)
+        else:
+            times.append(fut.result())
     if fails:
         buf = buf.getvalue().rstrip()
         raise RemoteExecutionFailed(buf)
+    return times
 
 
 class Tracker(object):
