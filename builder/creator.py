@@ -182,6 +182,17 @@ def make_az_selector(azs):
     return az_selector
 
 
+def initial_prep_work(args, cloud, servers):
+    """Performs some initial setup on the servers post-boot."""
+    for kind, server in servers.items():
+        server.machine['mkdir']("-p", ".git")
+        server.machine['touch'](".gitconfig")
+        git = server.machine['git']
+        creator = cloud.auth['username']
+        git("config", "--global", "user.email", "%s@godaddy.com" % creator)
+        git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
+
+
 def clone_devstack(args, cloud, servers):
     """Clears prior devstack and clones devstack + adjusts branch."""
     print("Cloning devstack (from %s)" % (args.source))
@@ -354,7 +365,6 @@ def create_local_files(args, cloud, servers, settings):
         'DATABASE_HOST': servers['db'].hostname,
         'RABBIT_HOST': servers['rb'].hostname,
         'RELEASE': args.branch,
-        'CREATOR': cloud.auth['username'],
     })
     target_path = "/home/%s/devstack/local.conf" % DEF_USER
     for kind, server in servers.items():
@@ -434,6 +444,8 @@ def bind_hostnames(servers):
 
 def transform(args, cloud, tracker, servers):
     """Turn (mostly) raw servers into useful things."""
+    tracker.call_and_mark(initial_prep_work,
+                          args, cloud, servers)
     tracker.call_and_mark(upload_repos,
                           args, cloud, servers)
     tracker.call_and_mark(install_some_packages,

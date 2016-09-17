@@ -1,8 +1,6 @@
 #!/bin/bash
 set -x
 
-export HOME=/root
-
 # Install some common things...
 yum install -y git nano
 yum install -y python-devel
@@ -28,8 +26,3 @@ cat > /etc/sudoers.d/$sudo_fn << EOF
 # Do not edit.
 $tobe_user ALL=(ALL) NOPASSWD:ALL
 EOF
-
-# Configure git to some sane default...
-creator='{{ CREATOR }}'
-git config --global user.email "${creator}@godaddy.com"
-git config --global user.name "$creator"
