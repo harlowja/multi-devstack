@@ -335,7 +335,7 @@ def run_stack(args, cloud, tracker, servers):
         p_cmds.append(
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname))
-    utils.run_and_record(p_cmds)
+    utils.run_and_record(p_cmds, wait_maker=utils.Spinner)
     # Order matters here...
     for kind in ['map', 'cap', 'hv']:
         server = servers[kind]
