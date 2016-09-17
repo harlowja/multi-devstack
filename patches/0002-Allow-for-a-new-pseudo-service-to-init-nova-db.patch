@@ -1,0 +1,58 @@
+From 974b2f2c67bba878032f48d66608cca7e899d972 Mon Sep 17 00:00:00 2001
+From: Joshua Harlow <jxharlow@godaddy.com>
+Date: Fri, 16 Sep 2016 17:35:56 -0700
+Subject: [PATCH] Allow for a new pseudo-service to init nova-db
+
+---
+ lib/nova | 30 ++++++++++++++++++------------
+ 1 file changed, 18 insertions(+), 12 deletions(-)
+
+diff --git a/lib/nova b/lib/nova
+index fbc0508..ac222ab 100644
+--- a/lib/nova
++++ b/lib/nova
+@@ -722,23 +722,29 @@ function create_nova_keys_dir {
+     sudo install -d -o $STACK_USER ${NOVA_STATE_PATH} ${NOVA_STATE_PATH}/keys
+ }
+ 
++function init_nova_db {
++    # (Re)create nova database
++    recreate_database nova
++
++    # Migrate nova database
++    $NOVA_BIN_DIR/nova-manage db sync
++
++    if is_service_enabled n-cell; then
++        recreate_database $NOVA_CELLS_DB
++    fi
++
++    recreate_database $NOVA_API_DB
++    $NOVA_BIN_DIR/nova-manage api_db sync
++}
++
+ # init_nova() - Initialize databases, etc.
+ function init_nova {
+     # All nova components talk to a central database.
+     # Only do this step once on the API node for an entire cluster.
+     if is_service_enabled $DATABASE_BACKENDS && is_service_enabled n-api; then
+-        # (Re)create nova database
+-        recreate_database nova
+-
+-        # Migrate nova database
+-        $NOVA_BIN_DIR/nova-manage db sync
+-
+-        if is_service_enabled n-cell; then
+-            recreate_database $NOVA_CELLS_DB
+-        fi
+-
+-        recreate_database $NOVA_API_DB
+-        $NOVA_BIN_DIR/nova-manage api_db sync
++        init_nova_db
++    elif is_service_enabled n-api-db; then
++        init_nova_db
+     fi
+ 
+     create_nova_cache_dir
+-- 
+2.7.4 (Apple Git-66)
+

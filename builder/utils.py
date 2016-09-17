@@ -1,3 +1,5 @@
+# -*- coding: utf8 -*-
+
 from __future__ import print_function
 
 from binascii import hexlify
@@ -5,11 +7,14 @@ from datetime import datetime
 
 import errno
 import functools
+import itertools
 import json
 import os
 import random
 import socket
 import string
+import sys
+import threading
 import time
 
 from concurrent import futures
@@ -25,6 +30,56 @@ from paramiko.common import DEBUG
 from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 
 PASS_CHARS = string.ascii_lowercase + string.digits
+
+
+class Spinner(object):
+    def __init__(self, msg=None, delay=0.3):
+        self._it = itertools.cycle(u"◐◓◑◒")
+        self._t = None
+        self._msg = msg
+        self._delay = delay
+        self._ev = threading.Event()
+        self._dead = threading.Event()
+        self._dead.set()
+
+    def _runner(self):
+        msg_sent = False
+        output = 0
+        while not self._ev.is_set():
+            if self._msg is not None and not msg_sent:
+                sys.stdout.write(self._msg)
+                sys.stdout.flush()
+                msg_sent = True
+            sys.stdout.write(six.next(self._it))
+            sys.stdout.flush()
+            self._ev.wait(self._delay)
+            sys.stdout.write('\b')
+            sys.stdout.flush()
+            output += 1
+        if output:
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        self._dead.set()
+
+    def start(self):
+        self._dead.clear()
+        self._ev.clear()
+        self._t = threading.Thread(target=self._runner)
+        self._t.daemon = True
+        self._t.start()
+
+    def stop(self):
+        self._ev.set()
+
+    def wait(self):
+        self._dead.wait()
+
+    def __enter__(self):
+        self.start()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+        self.wait()
 
 
 class RemoteExecutionFailed(Exception):
@@ -88,8 +143,8 @@ def run_and_record(remote_cmds, indent="",
             if remote_cmd.cmd_args:
                 pretty_cmd += " "
                 pretty_cmd += " ".join([str(a) for a in remote_cmd.cmd_args])
-            print("%sRunning '%s' on server s:" % (indent, pretty_cmd,
-                                                   remote_cmd.server_name))
+            print("%sRunning '%s' on server '%s'" % (indent, pretty_cmd,
+                                                     remote_cmd.server_name))
             stderr_path = remote_cmd.stderr_record_path
             stderr_fh = open(stderr_path, 'a+b')
             e_stack.callback(stderr_fh.close)
@@ -106,8 +161,7 @@ def run_and_record(remote_cmds, indent="",
         if max_workers is None:
             max_workers = len(to_run)
         if wait_maker is not None:
-            wait_cm = wait_maker(msg='Please wait')
-            with wait_cm:
+            with wait_maker('Please wait '):
                 with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
                     for (remote_cmd, run_func) in to_run:
                         ran.append((remote_cmd, ex.submit(run_func)))

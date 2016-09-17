@@ -27,3 +27,7 @@ cat > /etc/sudoers.d/$sudo_fn << EOF
 $tobe_user ALL=(ALL) NOPASSWD:ALL
 EOF
 
+# Configure git to some sane default...
+creator='{{ CREATOR }}'
+git config --global user.email "${creator}@godaddy.com"
+git config --global user.name "$creator"

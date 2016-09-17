@@ -9,7 +9,6 @@ import random
 import sys
 
 from concurrent import futures
-from propeller import propeller
 
 import jinja2
 
@@ -37,11 +36,10 @@ DEFAULT_SETTINGS = {
 DEV_TOPO = tuple([
     # Cap servers are what we call child cells.
     ('cap', '%(user)s-cap-%(rand)s'),
-    # Map servers are the parent cell + glance + keystone + top level things,
-    # as well as a database (mariadb); in the future we can hopefully
-    # split off the db, but there is a odd interaction between nova
-    # api and the database that requires it to be on the same node.
+    # Map servers are the parent cell + glance + keystone + top level things.
     ('map', '%(user)s-map-%(rand)s'),
+    # Where the database (mariadb runs).
+    ('db', '%(user)s-db-%(rand)s'),
     # Rabbit.
     ('rb', '%(user)s-rb-%(rand)s'),
     # A hypervisor + n-cpu + n-api-meta
@@ -49,9 +47,10 @@ DEV_TOPO = tuple([
 ])
 DEV_FLAVORS = {
     'cap': 'm1.medium',
-    'map': 'm1.xlarge',
+    'db': 'm1.medium',
+    'map': 'm1.large',
     'rb': 'm1.medium',
-    'hv': 'm1.xlarge',
+    'hv': 'm1.large',
 }
 LOG = logging.getLogger(__name__)
 
@@ -138,12 +137,6 @@ def create_meta(cloud):
     }
 
 
-def prop_maker(msg=None):
-    return propeller(msg=msg,
-                     ops=False, eta=False, percent=False,
-                     spinner='circle_halfs')
-
-
 def get_server_ip(server):
     for field in ['private_v4', 'accessIPv4']:
         ip = server.get(field)
@@ -193,7 +186,7 @@ def clone_devstack(args, cloud, servers):
     """Clears prior devstack and clones devstack + adjusts branch."""
     print("Cloning devstack (from %s)" % (args.source))
     for kind, server in servers.items():
-        with prop_maker(msg="  Cloning devstack in %s " % (server.hostname)):
+        with utils.Spinner("  Cloning devstack in %s " % (server.hostname)):
             rm = server.machine["rm"]
             rm("-rf", "devstack")
             git = server.machine['git']
@@ -312,15 +305,13 @@ def upload_extras(args, cloud, servers):
 
 def run_stack(args, cloud, tracker, servers):
     """Activates stack.sh on the various servers (in the right order)."""
-    # Order matters here...
-    #
-    # We may have already done it (aka, underway so use them if
-    # we have done that).
     finder = lambda r: r.kind == 'stacked'
     stacked_done = dict((r.server_kind, r.server_hostname)
                         for r in tracker.search_last_using(finder))
     stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
-    for kind in ['rb', 'map', 'cap', 'hv']:
+    # We can do these in parallel...
+    p_cmds = []
+    for kind in ['rb', 'db']:
         server = servers[kind]
         if kind in stacked_done and stacked_done[kind] == server.hostname:
             print("Already (previously) finished"
@@ -329,14 +320,24 @@ def run_stack(args, cloud, tracker, servers):
         cmd = server.machine[stack_sh]
         record_path = os.path.join(args.scratch_dir,
                                    "%s.stack" % server.hostname)
-        times = utils.run_and_record([
+        p_cmds.append(
+            utils.RemoteCommand(cmd, record_path=record_path,
+                                server_name=server.hostname))
+    utils.run_and_record(p_cmds)
+    # Order matters here...
+    for kind in ['map', 'cap', 'hv']:
+        server = servers[kind]
+        if kind in stacked_done and stacked_done[kind] == server.hostname:
+            print("Already (previously) finished"
+                  " running '%s' on %s" % (stack_sh, server.hostname))
+            continue
+        cmd = server.machine[stack_sh]
+        record_path = os.path.join(args.scratch_dir,
+                                   "%s.stack" % server.hostname)
+        utils.run_and_record([
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname)
-        ], wait_maker=prop_maker)
-        run_time_min = times[0] / 60.0
-        if run_time_min > 20:
-            print("WARNING: devstack run took > 20 minutes, %s"
-                  " is a very slow node..." % server.hostname)
+        ], wait_maker=utils.Spinner)
         tracker.record({'kind': 'stacked',
                         'server_hostname': server.hostname,
                         'server_kind': kind})
@@ -350,9 +351,10 @@ def create_local_files(args, cloud, servers, settings):
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
     params.update({
-        'DATABASE_HOST': servers['map'].hostname,
+        'DATABASE_HOST': servers['db'].hostname,
         'RABBIT_HOST': servers['rb'].hostname,
         'RELEASE': args.branch,
+        'CREATOR': cloud.auth['username'],
     })
     target_path = "/home/%s/devstack/local.conf" % DEF_USER
     for kind, server in servers.items():
@@ -492,6 +494,7 @@ def create(args, cloud, tracker):
     ud_params = {
         'USER': DEF_USER,
         'USER_PW': DEF_PW,
+        'CREATOR': cloud.auth['username'],
     }
     ud_tpl = args.templates("ud.tpl")
     ud = ud_tpl.render(**ud_params)
@@ -574,7 +577,7 @@ def create(args, cloud, tracker):
     # Wait for them to actually become active...
     print("Waiting for instances to become ACTIVE, please wait...")
     for kind, server in servers.items():
-        with prop_maker(msg="  Waiting for instance %s " % server.name):
+        with utils.Spinner("  Waiting for instance %s " % server.name):
             server = cloud.wait_for_server(server, auto_ip=False)
             server_ip = get_server_ip(server)
             if not server_ip:
