@@ -60,15 +60,33 @@ LOG = logging.getLogger(__name__)
 class Helper(object):
     """Conglomerate of things for our to-be/in-progress cloud."""
 
-    def __init__(self, args, cloud, tracker, servers, settings):
+    def __init__(self, args, cloud, tracker, servers):
         self.args = args
         self.servers = tuple(servers)
         self.machines = {}
-        self.settings = settings
         self.tracker = tracker
         self.exit_stack = contextlib2.ExitStack()
         self.cloud = cloud
         self.steps_ran = 0
+        self._settings = None
+
+    @property
+    def settings(self):
+        if self._settings is not None:
+            return self._settings
+        else:
+            settings = self.tracker.get("settings", {})
+            for setting_name in DEFAULT_SETTINGS.keys():
+                if setting_name not in settings:
+                    settings[setting_name] = DEFAULT_SETTINGS[setting_name]
+            for setting_name in ['ADMIN_PASSWORD', 'SERVICE_TOKEN',
+                                 'SERVICE_PASSWORD', 'RABBIT_PASSWORD']:
+                if setting_name not in settings:
+                    settings[setting_name] = utils.generate_secret()
+            self.tracker['settings'] = settings
+            self.tracker.sync()
+            self._settings = settings
+            return self._settings
 
     def run_and_track(self, func, always_run=False, indent=''):
         step_num = self.steps_ran + 1
@@ -444,18 +462,6 @@ def create_local_files(helper, indent=''):
         sys.stdout.write("(OK)\n")
 
 
-def setup_settings(tracker):
-    settings = tracker.get("settings", {})
-    settings.update(DEFAULT_SETTINGS)
-    for setting_name in ['ADMIN_PASSWORD', 'SERVICE_TOKEN',
-                         'SERVICE_PASSWORD', 'RABBIT_PASSWORD']:
-        if setting_name not in settings:
-            settings[setting_name] = utils.generate_secret()
-    tracker['settings'] = settings
-    tracker.sync()
-    return settings
-
-
 def bind_hostnames(helper, indent=''):
     """Attaches fully qualified hostnames to server objects."""
     for server in helper.servers:
@@ -689,8 +695,7 @@ def create(args, cloud, tracker):
     servers = wait_servers(args, cloud, tracker,
                            bake_servers(args, cloud, tracker, topo))
     # Now turn those servers into something useful...
-    with Helper(args, cloud, tracker,
-                servers, setup_settings(tracker)) as helper:
+    with Helper(args, cloud, tracker, servers) as helper:
         futs = []
         with utils.Spinner("Validating connectivity"
                            " using %s threads" % (len(servers)),
