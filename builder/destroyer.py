@@ -38,6 +38,19 @@ def destroy(args, cloud, tracker):
                 destroyed.add(server.name)
             tracker['servers'] = servers
             tracker.sync()
+            # If there exists the same name in the maybe servers, just
+            # now finally remove it (and re-save).
+            tmp_maybe_servers = []
+            any_removed = False
+            for tmp_server in maybe_servers:
+                if tmp_server.name != server.name:
+                    tmp_maybe_servers.append(tmp_server)
+                else:
+                    any_removed = True
+            if any_removed:
+                maybe_servers = tmp_maybe_servers
+                tracker['maybe_servers'] = maybe_servers
+                tracker.sync()
         while maybe_servers:
             server = maybe_servers.pop()
             if server.name not in destroyed:
