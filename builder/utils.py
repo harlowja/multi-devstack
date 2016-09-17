@@ -104,6 +104,11 @@ class RemoteCommand(object):
             self.server_name = cmd.machine.host
 
 
+def safe_write_open(path, mode):
+    safe_make_dir(os.path.basename(path))
+    return open(path, mode)
+
+
 def trim_it(block, max_len, reverse=False):
     block_len = len(block)
     if not reverse:
@@ -146,10 +151,10 @@ def run_and_record(remote_cmds, indent="",
             print("%sRunning '%s' on server '%s'" % (indent, pretty_cmd,
                                                      remote_cmd.server_name))
             stderr_path = remote_cmd.stderr_record_path
-            stderr_fh = open(stderr_path, 'a+b')
+            stderr_fh = safe_write_open(stderr_path, 'a+b')
             e_stack.callback(stderr_fh.close)
             stdout_path = remote_cmd.stdout_record_path
-            stdout_fh = open(stdout_path, 'a+b')
+            stdout_fh = safe_write_open(stdout_path, 'a+b')
             e_stack.callback(stdout_fh.close)
             for (kind, filename) in [('stdout', stdout_fh.name),
                                      ('stderr', stderr_fh.name)]:

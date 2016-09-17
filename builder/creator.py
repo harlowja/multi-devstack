@@ -362,7 +362,7 @@ def create_local_files(args, cloud, servers, settings):
               " %s, please wait..." % (server.hostname))
         local_path = os.path.join(args.scratch_dir,
                                   "local.%s.conf" % server.hostname)
-        with open(local_path, 'wb') as o_fh:
+        with utils.safe_write_open(local_path, 'wb') as o_fh:
             tpl = args.templates("local.%s.tpl" % kind)
             contents = tpl.render(**params)
             o_fh.write(contents)
@@ -417,7 +417,7 @@ def setup_settings(args):
         needs_write = True
     settings.update(tmp_settings)
     if needs_write:
-        with open(args.settings, 'wb') as fh:
+        with utils.safe_write_open(args.settings, 'wb') as fh:
             cfg.write(fh)
     return settings
 
@@ -489,8 +489,6 @@ def create(args, cloud, tracker):
             raise RuntimeError("Can not create '%s' instances without"
                                " matching flavor '%s'" % (kind, kind_flv))
         flavors[kind] = flv
-    # Ensure this is ready and waiting...
-    utils.safe_make_dir(args.scratch_dir)
     ud_params = {
         'USER': DEF_USER,
         'USER_PW': DEF_PW,
