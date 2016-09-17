@@ -104,6 +104,11 @@ def bind_subparser(subparsers):
                                      " directory (default=%(default)s)"),
                                default=os.path.join(os.getcwd(), "extras.d"),
                                metavar="PATH")
+    parser_create.add_argument("--patches",
+                               help=("patches"
+                                     " directory (default=%(default)s)"),
+                               default=os.path.join(os.getcwd(), "patches"),
+                               metavar="PATH")
     parser_create.add_argument("--repos",
                                help=("repos.d"
                                      " directory (default=%(default)s)"),
@@ -263,6 +268,27 @@ def upload_repos(args, cloud, servers):
                 sys.stdout.write("(OK)\n")
 
 
+def patch_devstack(args, clouds, servers):
+    """Applies local devstack patches to cloned devstack."""
+    patches_path = os.path.abspath(args.patches)
+    for (kind, server) in servers.items():
+        file_names = [file_name
+                      for file_name in os.listdir(patches_path)
+                      if file_name.endswith(".patch")]
+        if file_names:
+            print("Uploading (and applying) %s patch file/s to"
+                  " %s, please wait..." % (len(file_names), server.hostname))
+            for file_name in file_names:
+                target_path = "/home/%s/devstack/%s" % (DEF_USER, file_name)
+                local_path = os.path.join(patches_path, file_name)
+                sys.stdout.write("  Uploading & applying '%s' " % file_name)
+                sys.stdout.flush()
+                server.machine.upload(local_path, target_path)
+                git = server.machine['git']
+                git("am", file_name, cwd='devstack')
+                sys.stdout.write("(OK)\n")
+
+
 def upload_extras(args, cloud, servers):
     """Uploads all extras.d files into corresponding devstack directory."""
     extras_path = os.path.abspath(args.extras)
@@ -411,6 +437,8 @@ def transform(args, cloud, tracker, servers):
     tracker.call_and_mark(install_some_packages,
                           args, cloud, servers)
     tracker.call_and_mark(clone_devstack,
+                          args, cloud, servers)
+    tracker.call_and_mark(patch_devstack,
                           args, cloud, servers)
     tracker.call_and_mark(upload_extras,
                           args, cloud, servers)
