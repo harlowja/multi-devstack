@@ -138,6 +138,7 @@ def create_meta(cloud):
 
 
 def get_server_ip(server):
+    """Examines a server and tries to get a useable v4 ip."""
     for field in ['private_v4', 'accessIPv4']:
         ip = server.get(field)
         if ip:
