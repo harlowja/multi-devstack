@@ -105,7 +105,7 @@ class RemoteCommand(object):
 
 
 def safe_write_open(path, mode):
-    safe_make_dir(os.path.basename(path))
+    safe_make_dir(os.path.dirname(path))
     return open(path, mode)
 
 
