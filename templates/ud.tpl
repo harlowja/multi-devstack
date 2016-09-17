@@ -1,6 +1,8 @@
 #!/bin/bash
 set -x
 
+export HOME=/root
+
 # Install some common things...
 yum install -y git nano
 yum install -y python-devel
