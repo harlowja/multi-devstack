@@ -88,10 +88,8 @@ def run_and_record(remote_cmds, indent="",
             if remote_cmd.cmd_args:
                 pretty_cmd += " "
                 pretty_cmd += " ".join([str(a) for a in remote_cmd.cmd_args])
-            print("%sRunning '%s' on server"
-                  " '%s', please wait..." % (indent,
-                                             pretty_cmd,
-                                             remote_cmd.server_name))
+            print("%sRunning '%s' on server s:" % (indent, pretty_cmd,
+                                                   remote_cmd.server_name))
             stderr_path = remote_cmd.stderr_record_path
             stderr_fh = open(stderr_path, 'a+b')
             e_stack.callback(stderr_fh.close)
@@ -108,12 +106,13 @@ def run_and_record(remote_cmds, indent="",
         if max_workers is None:
             max_workers = len(to_run)
         if wait_maker is not None:
-            wait_cm = wait_maker()
+            wait_cm = wait_maker(msg='Please wait')
             with wait_cm:
                 with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
                     for (remote_cmd, run_func) in to_run:
                         ran.append((remote_cmd, ex.submit(run_func)))
         else:
+            print("Please wait...")
             with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
                 for (remote_cmd, run_func) in to_run:
                     ran.append((remote_cmd, ex.submit(run_func)))
