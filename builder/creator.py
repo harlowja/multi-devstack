@@ -1,20 +1,24 @@
 from __future__ import print_function
 
-import ConfigParser
-
-import errno
+import argparse
+import copy
 import logging
 import os
 import random
 import sys
 
-from concurrent import futures
+from datetime import datetime
 
+import contextlib2
+import futurist
 import jinja2
+import munch
 
 from builder import images
 from builder import pprint
 from builder import utils
+
+from builder.roles import Roles
 
 # The default stack user name and password...
 #
@@ -33,26 +37,87 @@ DEFAULT_SETTINGS = {
     # This appears to be the default, leave it be...
     'RABBIT_USER': 'stackrabbit',
 }
-DEV_TOPO = tuple([
-    # Cap servers are what we call child cells.
-    ('cap', '%(user)s-cap-%(rand)s'),
-    # Map servers are the parent cell + glance + keystone + top level things.
-    ('map', '%(user)s-map-%(rand)s'),
-    # Where the database (mariadb runs).
-    ('db', '%(user)s-db-%(rand)s'),
-    # Rabbit.
-    ('rb', '%(user)s-rb-%(rand)s'),
-    # A hypervisor + n-cpu + n-api-meta
-    ('hv', '%(user)s-hv-%(rand)s'),
-])
-DEV_FLAVORS = {
-    'cap': 'm1.medium',
-    'db': 'm1.medium',
-    'map': 'm1.large',
-    'rb': 'm1.medium',
-    'hv': 'm1.large',
+# Kind to flavor mapping.
+DEF_FLAVORS = {
+    Roles.CAP: 'm1.medium',
+    Roles.DB: 'm1.medium',
+    Roles.MAP: 'm1.large',
+    Roles.RB: 'm1.medium',
+    Roles.HV: 'm1.large',
 }
+DEF_TOPO = {
+    Roles.CAP: '%(user)s-cap-%(rand)s',
+    Roles.MAP: '%(user)s-map-%(rand)s',
+    Roles.DB: '%(user)s-db-%(rand)s',
+    Roles.RB: '%(user)s-rb-%(rand)s',
+    # Does not include hvs, those get added dynamically at runtime.
+    Roles.HV: [],
+}
+HV_NAME_TPL = '%(user)s-hv-%(rand)s'
 LOG = logging.getLogger(__name__)
+
+
+class Helper(object):
+    """Conglomerate of things for our to-be/in-progress cloud."""
+
+    def __init__(self, args, cloud, tracker, servers, settings):
+        self.args = args
+        self.servers = tuple(servers)
+        self.machines = {}
+        self.settings = settings
+        self.tracker = tracker
+        self.exit_stack = contextlib2.ExitStack()
+        self.cloud = cloud
+        self.steps_ran = 0
+
+    def run_and_track(self, func, always_run=False, indent=''):
+        step_num = self.steps_ran + 1
+        print("%sActivating step %s." % (indent, step_num))
+        self.steps_ran += 1
+        print("%sName: '%s'" % (indent, func.__name__))
+        func_details = getattr(func, '__doc__', '')
+        if func_details:
+            print("%sDetails: '%s'" % (indent, func_details))
+        store_name = ":".join([func.__module__, func.__name__])
+        if store_name not in self.tracker or always_run:
+            result = func(self, indent=indent + "  ")
+            self.tracker[store_name] = (result, datetime.utcnow())
+            self.tracker.sync()
+            print('%sStep %s has finished.' % (indent, step_num))
+        else:
+            result, finished_on = self.tracker[store_name]
+            print('%sStep %s was previously'
+                  ' finished on %s.' % (indent, step_num,
+                                        finished_on.isoformat()))
+        return result
+
+    def iter_server_by_kind(self, kind):
+        for server in self.servers:
+            if server.kind == kind:
+                yield server
+
+    def __enter__(self):
+        return self
+
+    def match_machine(self, server_name, machine):
+        matched_servers = [server for server in self.servers
+                           if server.name == server_name]
+        if not matched_servers:
+            raise RuntimeError("Can not match ssh machine"
+                               " to unknown server '%s'" % server_name)
+        self.machines[server_name] = machine
+        self.exit_stack.callback(machine.close)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.exit_stack.close()
+
+
+def pos_int(val):
+    i_val = int(val)
+    if i_val <= 0:
+        msg = "%s is not a positive integer" % val
+        raise argparse.ArgumentTypeError(msg)
+    return i_val
 
 
 def post_process_args(args):
@@ -70,13 +135,11 @@ def bind_subparser(subparsers):
                                     " use (if not provided one will"
                                     " automatically be found)",
                                default=None)
-    parser_create.add_argument("--settings",
-                               help=("file to read/write settings"
-                                     " information"
-                                     " into/from (default=%(default)s)"),
-                               default=os.path.join(os.getcwd(),
-                                                    "settings.ini"),
-                               metavar="PATH")
+    parser_create.add_argument("--hypervisors",
+                               help="number of hypervisors"
+                                    " to spin up (default=%(default)s)",
+                               default=2, type=pos_int,
+                               metavar='NUMBER')
     parser_create.add_argument("-a", "--availability-zone",
                                help="explicit availability"
                                     " to use (if not provided one will"
@@ -137,15 +200,6 @@ def create_meta(cloud):
     }
 
 
-def get_server_ip(server):
-    """Examines a server and tries to get a useable v4 ip."""
-    for field in ['private_v4', 'accessIPv4']:
-        ip = server.get(field)
-        if ip:
-            return ip
-    return None
-
-
 def make_az_selector(azs):
     """Picks a az the best it can (given a list of azs)."""
 
@@ -183,36 +237,41 @@ def make_az_selector(azs):
     return az_selector
 
 
-def initial_prep_work(args, cloud, servers):
+def initial_prep_work(helper, indent=''):
     """Performs some initial setup on the servers post-boot."""
-    for kind, server in servers.items():
-        server.machine['mkdir']("-p", ".git")
-        server.machine['touch'](".gitconfig")
-        git = server.machine['git']
-        creator = cloud.auth['username']
+    for server in helper.servers:
+        machine = helper.machines[server.name]
+        machine['mkdir']("-p", ".git")
+        machine['touch'](".gitconfig")
+        git = machine['git']
+        creator = helper.cloud.auth['username']
         git("config", "--global", "user.email", "%s@godaddy.com" % creator)
         git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
 
 
-def clone_devstack(args, cloud, servers):
+def clone_devstack(helper, indent=''):
     """Clears prior devstack and clones devstack + adjusts branch."""
     print("Cloning devstack (from %s)" % (args.source))
-    for kind, server in servers.items():
+    for server in servers:
+        machine = ssh_machines[server.name]
         with utils.Spinner("  Cloning devstack in %s " % (server.hostname)):
-            rm = server.machine["rm"]
+            rm = machine["rm"]
             rm("-rf", "devstack")
-            git = server.machine['git']
+            git = machine['git']
             git("clone", args.source)
             git('checkout', args.branch, cwd="devstack")
 
 
-def install_some_packages(args, cloud, servers):
+def install_some_packages(helper, indent=''):
     """Installs a few prerequisite packages on the various servers."""
     remote_cmds = []
-    for kind in ['map', 'cap', 'hv']:
-        server = servers[kind]
-        sudo = server.machine['sudo']
-        yum = sudo[server.machine['yum']]
+    hvs = [server for server in servers.values() if server.kind == Roles.HV]
+    maps = [server for server in servers.values() if server.kind == Roles.MAP]
+    caps = [server for server in servers.values() if server.kind == Roles.CAP]
+    for server in maps + caps + hvs:
+        machine = machines[server.name]
+        sudo = machine['sudo']
+        yum = sudo[machine['yum']]
         record_path = os.path.join(
             args.scratch_dir, "%s.yum_install" % (server.hostname))
         remote_cmds.append(
@@ -228,11 +287,11 @@ def install_some_packages(args, cloud, servers):
                 record_path=record_path,
                 server_name=server.hostname))
     utils.run_and_record(remote_cmds)
-    for kind in ['hv']:
-        server = servers[kind]
-        sudo = server.machine['sudo']
-        yum = sudo[server.machine['yum']]
-        service = sudo[server.machine['service']]
+    for server in hvs:
+        machine = machines[server.name]
+        sudo = machine['sudo']
+        yum = sudo[machine['yum']]
+        service = sudo[machine['service']]
         record_path = os.path.join(
             args.scratch_dir, "%s.yum_install" % (server.hostname))
         utils.run_and_record([
@@ -247,14 +306,15 @@ def install_some_packages(args, cloud, servers):
         service('openvswitch', 'restart')
 
 
-def upload_repos(args, cloud, servers):
+def upload_repos(helper, indent=''):
     """Uploads all repos.d files into corresponding repos.d directory."""
     repos_path = os.path.abspath(args.repos)
-    for (kind, server) in servers.items():
+    for server in servers.values():
         file_names = [file_name
                       for file_name in os.listdir(repos_path)
                       if file_name.endswith(".repo")]
         if file_names:
+            machine = machines[server.name]
             print("Uploading %s repos.d file/s to"
                   " %s, please wait..." % (len(file_names), server.hostname))
             for file_name in file_names:
@@ -264,23 +324,24 @@ def upload_repos(args, cloud, servers):
                 sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
                                                                 target_path))
                 sys.stdout.flush()
-                server.machine.upload(local_path, tpm_path)
-                sudo = server.machine['sudo']
-                mv = sudo[server.machine['mv']]
+                machine.upload(local_path, tpm_path)
+                sudo = machine['sudo']
+                mv = sudo[machine['mv']]
                 mv(tpm_path, target_path)
-                yum = sudo[server.machine['yum']]
+                yum = sudo[machine['yum']]
                 yum('clean', 'all')
                 sys.stdout.write("(OK)\n")
 
 
-def patch_devstack(args, clouds, servers):
+def patch_devstack(helper, indent=''):
     """Applies local devstack patches to cloned devstack."""
     patches_path = os.path.abspath(args.patches)
-    for (kind, server) in servers.items():
+    for server in servers:
         file_names = [file_name
                       for file_name in os.listdir(patches_path)
                       if file_name.endswith(".patch")]
         if file_names:
+            machine = machines[server.name]
             print("Uploading (and applying) %s patch file/s to"
                   " %s, please wait..." % (len(file_names), server.hostname))
             for file_name in file_names:
@@ -288,20 +349,21 @@ def patch_devstack(args, clouds, servers):
                 local_path = os.path.join(patches_path, file_name)
                 sys.stdout.write("  Uploading & applying '%s' " % file_name)
                 sys.stdout.flush()
-                server.machine.upload(local_path, target_path)
-                git = server.machine['git']
+                machine.upload(local_path, target_path)
+                git = machine['git']
                 git("am", file_name, cwd='devstack')
                 sys.stdout.write("(OK)\n")
 
 
-def upload_extras(args, cloud, servers):
+def upload_extras(helper, indent=''):
     """Uploads all extras.d files into corresponding devstack directory."""
     extras_path = os.path.abspath(args.extras)
-    for (kind, server) in servers.items():
+    for server in servers:
         file_names = [file_name
                       for file_name in os.listdir(extras_path)
                       if file_name.endswith(".sh")]
         if file_names:
+            machine = machines[server.name]
             print("Uploading %s extras.d file/s to"
                   " %s, please wait..." % (len(file_names), server.hostname))
             for file_name in file_names:
@@ -311,197 +373,102 @@ def upload_extras(args, cloud, servers):
                 sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
                                                                 target_path))
                 sys.stdout.flush()
-                server.machine.upload(local_path, target_path)
+                machine.upload(local_path, target_path)
                 sys.stdout.write("(OK)\n")
 
 
-def run_stack(args, cloud, tracker, servers):
+def run_stack(helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
-    finder = lambda r: r.kind == 'stacked'
-    stacked_done = dict((r.server_kind, r.server_hostname)
-                        for r in tracker.search_last_using(finder))
     stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
     # We can do these in parallel...
-    p_cmds = []
-    for kind in ['rb', 'db']:
-        server = servers[kind]
-        if kind in stacked_done and stacked_done[kind] == server.hostname:
-            print("Already (previously) finished"
-                  " running '%s' on %s" % (stack_sh, server.hostname))
-            continue
-        cmd = server.machine[stack_sh]
+    rbs = [server for server in servers if server.kind == Roles.RB]
+    dbs = [server for server in servers if server.kind == Roles.DB]
+    remote_cmds = []
+    for server in rbs + dbs:
+        machine = machines[server.name]
+        cmd = machine[stack_sh]
         record_path = os.path.join(args.scratch_dir,
                                    "%s.stack" % server.hostname)
-        p_cmds.append(
+        remote_cmds.append(
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname))
-    utils.run_and_record(p_cmds, wait_maker=utils.Spinner)
+    utils.run_and_record(remote_cmds)
     # Order matters here...
-    for kind in ['map', 'cap', 'hv']:
-        server = servers[kind]
-        if kind in stacked_done and stacked_done[kind] == server.hostname:
-            print("Already (previously) finished"
-                  " running '%s' on %s" % (stack_sh, server.hostname))
-            continue
-        cmd = server.machine[stack_sh]
+    hvs = [server for server in servers.values() if server.kind == Roles.HV]
+    maps = [server for server in servers.values() if server.kind == Roles.MAP]
+    caps = [server for server in servers.values() if server.kind == Roles.CAP]
+    for server in maps + caps + hvs:
+        machine = machines[server.name]
+        cmd = machine[stack_sh]
         record_path = os.path.join(args.scratch_dir,
                                    "%s.stack" % server.hostname)
         utils.run_and_record([
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname)
-        ], wait_maker=utils.Spinner)
-        tracker.record({'kind': 'stacked',
-                        'server_hostname': server.hostname,
-                        'server_kind': kind})
+        ])
 
 
-def create_local_files(args, cloud, servers, settings):
+def create_local_files(helper, indent=''):
     """Creates and uploads all local.conf files for devstack."""
-    params = dict(DEFAULT_SETTINGS)
-    params.update(settings)
+    if settings:
+        params = settings.copy()
+    else:
+        params = {}
     # This needs to be done so that servers that will not have rabbit
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
+    rbs = [server for server in servers.values() if server.kind == Roles.RB]
+    dbs = [server for server in servers.values() if server.kind == Roles.DB]
     params.update({
-        'DATABASE_HOST': servers['db'].hostname,
-        'RABBIT_HOST': servers['rb'].hostname,
+        'DATABASE_HOST': dbs[0].hostname,
+        'RABBIT_HOST': rbs[0].hostname,
         'RELEASE': args.branch,
     })
     target_path = "/home/%s/devstack/local.conf" % DEF_USER
-    for kind, server in servers.items():
+    for server in servers.values():
+        machine = machine[server.name]
         print("Uploading local.conf to"
               " %s, please wait..." % (server.hostname))
         local_path = os.path.join(args.scratch_dir,
                                   "local.%s.conf" % server.hostname)
-        with utils.safe_write_open(local_path, 'wb') as o_fh:
-            tpl = args.templates("local.%s.tpl" % kind)
-            contents = tpl.render(**params)
-            o_fh.write(contents)
-            if not contents.endswith("\n"):
-                o_fh.write("\n")
-            o_fh.flush()
-            sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
-                                                            target_path))
-            sys.stdout.flush()
-            server.machine.upload(local_path, target_path)
-            sys.stdout.write("(OK)\n")
+        tpl = args.templates("local.%s.tpl" % kind)
+        tpl_contents = tpl.render(**params)
+        if not tpl_contents.endwith("\n"):
+            tpl_contents += "\n"
+        with utils.safe_open(local_path, 'wb') as o_fh:
+            o_fh.write(tpl_contents)
+        sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
+                                                        target_path))
+        sys.stdout.flush()
+        machine.upload(local_path, target_path)
+        sys.stdout.write("(OK)\n")
 
 
-def setup_settings(args):
-    def fill_section(cfg, section_name, val_names, fill_in_func):
-        settings = {}
-        needs_write = False
-        for val_name in val_names:
-            try:
-                val = cfg.get(section_name, val_name)
-            except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
-                if not cfg.has_section(section_name):
-                    cfg.add_section(section_name)
-                val = fill_in_func()
-                cfg.set(section_name, val_name, val)
-                needs_write = True
-            settings[val_name] = val
-        return (needs_write, settings)
-    # Ensure all needed (to-be-used) passwords/tokens exist and have a value.
-    cfg = ConfigParser.RawConfigParser()
-    needs_write = False
-    if args.settings:
-        try:
-            with open(args.settings, 'rb') as fh:
-                cfg.readfp(fh)
-        except IOError as e:
-            if e.errno == errno.ENOENT:
-                needs_write = True
-            else:
-                raise
-    settings = {}
-    tmp_needs_write, tmp_settings = fill_section(
-        cfg, 'tokens', ['SERVICE_TOKEN'], utils.generate_secret)
-    if tmp_needs_write:
-        needs_write = True
-    settings.update(tmp_settings)
-    tmp_needs_write, tmp_settings = fill_section(
-        cfg, 'passwords',
-        ['ADMIN_PASSWORD', 'SERVICE_PASSWORD', 'RABBIT_PASSWORD'],
-        utils.generate_secret)
-    if tmp_needs_write:
-        needs_write = True
-    settings.update(tmp_settings)
-    if needs_write:
-        with utils.safe_write_open(args.settings, 'wb') as fh:
-            cfg.write(fh)
+def setup_settings(tracker):
+    settings = tracker.get("settings", {})
+    settings.update(DEFAULT_SETTINGS)
+    for setting_name in ['ADMIN_PASSWORD', 'SERVICE_TOKEN',
+                         'SERVICE_PASSWORD', 'RABBIT_PASSWORD']:
+        if setting_name not in settings:
+            settings[setting_name] = utils.generate_secret()
+    tracker['settings'] = settings
+    tracker.sync()
     return settings
 
 
-def bind_hostnames(servers):
-    print("Determining full hostnames of servers, please wait...")
-    for kind, server in servers.items():
-        hostname_cmd = server.machine['hostname']
-        hostname = hostname_cmd("-f")
+def bind_hostnames(helper, indent=''):
+    """Attaches fully qualified hostnames to server objects."""
+    for server in helper.servers:
+        machine = helper.machines[server.name]
+        hostname = machine['hostname']("-f")
         hostname = hostname.strip()
         server.hostname = hostname
-        print("  Resolved %s to %s" % (server.name, hostname))
+        print("%s%s => %s" % (indent, server.name, hostname))
 
 
-def transform(args, cloud, tracker, servers):
-    """Turn (mostly) raw servers into useful things."""
-    tracker.call_and_mark(initial_prep_work,
-                          args, cloud, servers)
-    tracker.call_and_mark(upload_repos,
-                          args, cloud, servers)
-    tracker.call_and_mark(install_some_packages,
-                          args, cloud, servers)
-    tracker.call_and_mark(clone_devstack,
-                          args, cloud, servers)
-    tracker.call_and_mark(patch_devstack,
-                          args, cloud, servers)
-    tracker.call_and_mark(upload_extras,
-                          args, cloud, servers)
-    tracker.call_and_mark(create_local_files,
-                          args, cloud, servers, setup_settings(args))
-    tracker.call_and_mark(run_stack,
-                          args, cloud, tracker, servers)
-
-
-def create(args, cloud, tracker):
-    """Create a new environment."""
-    # Due to some funkiness with our openstack we have to list out
-    # the az's and pick one, typically favoring ones with 'cor' in there
-    # name.
-    nc = cloud.nova_client
-    # TODO(harlowja): why can't we list details?
-    azs = [az.zoneName
-           for az in nc.availability_zones.list(detailed=False)]
-    if not azs:
-        raise RuntimeError(
-                "Can not create instances in a cloud with no"
-                " availability zones")
-    if args.availability_zone:
-        if args.availability_zone not in azs:
-            raise RuntimeError(
-                "Can not create instances in unknown"
-                " availability zone '%s'" % args.availability_zone)
-        az_selector = lambda: args.availability_zone
-    else:
-        az_selector = make_az_selector(azs)
-    if args.image:
-        image = cloud.get_image(args.image)
-        if not image:
-            raise RuntimeError("Can not create instances with unknown"
-                               " source image '%s'" % args.image)
-    else:
-        image_kind = images.ImageKind.CENT7
-        image = images.find_image(cloud, image_kind)
-        if not image:
-            raise RuntimeError("Can not create instances (unable to"
-                               " locate a %s source image)" % image_kind.name)
-    flavors = {}
-    for kind, kind_flv in DEV_FLAVORS.items():
-        flv = cloud.get_flavor(kind_flv)
-        if not flv:
-            raise RuntimeError("Can not create '%s' instances without"
-                               " matching flavor '%s'" % (kind, kind_flv))
-        flavors[kind] = flv
+def spawn_topo(args, cloud, tracker,
+               make_topo, az_selector, flavors,
+               image):
     ud_params = {
         'USER': DEF_USER,
         'USER_PW': DEF_PW,
@@ -509,125 +476,234 @@ def create(args, cloud, tracker):
     }
     ud_tpl = args.templates("ud.tpl")
     ud = ud_tpl.render(**ud_params)
-    print("Spawning the following instances:")
-    topo = {}
+    topo = tracker.get("topo", {})
     pretty_topo = {}
-    # We may have already created it (aka, underway so use them if
-    # we have done that).
-    pre_creates = dict((r.server_kind, r.server_details)
-                       for r in tracker.search_last_using(
-                            lambda r: r.kind == 'server_pre_create'))
-    for kind, name_tpl in DEV_TOPO:
-        if kind not in pre_creates:
-            name_tpl_vals = {
+    print("Spawning the following instances:")
+    for kind in make_topo.keys():
+        if kind == Roles.HV:
+            names = list(make_topo[kind])
+        else:
+            names = [make_topo[kind]]
+        for name in names:
+            if name not in topo:
+                az = az_selector()
+                instance = munch.Munch({
+                    'name': name,
+                    'flavor': flavors[kind],
+                    'image': image,
+                    'availability_zone': az,
+                    'userdata': ud,
+                    'kind': kind,
+                })
+                topo[name] = instance
+                tracker['topo'] = topo
+                tracker.sync()
+            else:
+                instance = topo[name]
+            pretty_topo[name] = {
+                'name': instance.name,
+                'flavor': instance.flavor.name,
+                'image': instance.image.name,
+                'availability_zone': instance.availability_zone,
+                'kind': instance.kind.name,
+            }
+    for line in pprint.pformat(pretty_topo).splitlines():
+        print("  " + line)
+    return topo
+
+
+def wait_servers(args, cloud, tracker, servers):
+    def get_server_ip(server):
+        for field in ['private_v4', 'accessIPv4']:
+            ip = server.get(field)
+            if ip:
+                return ip
+        return None
+    # Wait for them to actually become active...
+    print("Waiting for instances to enter ACTIVE state.")
+    for i, server in enumerate(servers):
+        with utils.Spinner("  Waiting for %s" % server.name, args.verbose):
+            if server.status != 'ACTIVE':
+                server = cloud.wait_for_server(server, auto_ip=False)
+        server_ip = get_server_ip(server)
+        if not server_ip:
+            raise RuntimeError("Instance %s spawned but no ip"
+                               " was found associated" % server.name)
+        server.ip = server_ip
+        servers[i] = server
+        tracker['servers'] = servers
+        tracker.sync()
+    return servers
+
+
+def create_topo(args, cloud, tracker):
+    make_topo = tracker.get("make_topo")
+    if not make_topo:
+        make_topo = copy.deepcopy(DEF_TOPO)
+        for _i in xrange(0, args.hypervisors):
+            name = HV_NAME_TPL % {
                 'user': cloud.auth['username'],
                 'rand': random.randrange(1, 99),
             }
-            az = az_selector()
-            name = name_tpl % name_tpl_vals
-            topo[kind] = {
-                'name': name,
-                'flavor': flavors[kind],
-                'image': image,
-                'availability_zone': az,
-                'user_data': ud,
+            make_topo[Roles.HV].append(name)
+        for r in Roles:
+            if r != Roles.HV:
+                name_tpl = make_topo[r]
+                name = name_tpl % {
+                    'user': cloud.auth['username'],
+                    'rand': random.randrange(1, 99),
+                }
+                make_topo[r] = name
+        tracker["make_topo"] = make_topo
+        tracker.sync()
+    else:
+        # If we need to alter the number of hypervisors, do so now...
+        hvs = make_topo[Roles.HV]
+        while len(hvs) < args.hypervisors:
+            name = HV_NAME_TPL % {
+                'user': cloud.auth['username'],
+                'rand': random.randrange(1, 99),
             }
-            pretty_topo[kind] = {
-                'name': name,
-                'flavor': flavors[kind].name,
-                'image': image.name,
-                'availability_zone': az,
-            }
-            tracker.record({'kind': 'server_pre_create',
-                            'server_kind': kind,
-                            'name': name, 'server_details': topo[kind]})
+            hvs.append(name)
+        make_topo[Roles.HV] = hvs[0:args.hypervisors]
+        tracker["make_topo"] = make_topo
+        tracker.sync()
+    return make_topo
+
+
+def bake_servers(args, cloud, tracker, topo):
+    with utils.Spinner("Fetching existing servers", args.verbose):
+        made_servers = dict((server.name, server)
+                            for server in cloud.list_servers())
+    missing = []
+    found = []
+    servers = []
+    for instance in topo.values():
+        try:
+            server = made_servers[instance.name]
+        except KeyError:
+            missing.append(instance)
         else:
-            topo[kind] = pre_creates[kind]
-            pretty_topo[kind] = {
-                'name': topo[kind]['name'],
-                'flavor': topo[kind].flavor.name,
-                'image': topo[kind].image.name,
-                'availability_zone': topo[kind].availability_zone,
-            }
-    blob = pprint.pformat(pretty_topo)
-    for line in blob.splitlines():
-        print("  " + line)
-    # Only create things we have not already created (or that was
-    # destroyed partially...)
-    creates = dict((r.server.name, r.server)
-                   for r in tracker.search_last_using(
-                        lambda r: r.kind == 'server_create'))
-    destroys = set(r.name
-                   for r in tracker.search_last_using(
-                        lambda r: r.kind == 'server_destroy'))
-    servers = {}
-    for kind, details in topo.items():
-        name = details['name']
-        if name in creates and name not in destroys:
-            server = creates[name]
-            servers[kind] = server
+            found.append(instance)
+            server.kind = instance.kind
+            servers.append(server)
+            tracker['servers'] = servers
+            tracker.sync()
+    if found:
+        print("  Found:")
+        for instance in found:
+            print("    %s" % instance.name)
+    else:
+        print("  Found none.")
+    if missing:
+        print("  Creating:")
+        for instance in missing:
+            print("    %s" % instance.name)
+        maybe_servers = tracker.get("maybe_servers", [])
+        with utils.Spinner("  Spawning", args.verbose):
+            for instance in missing:
+                # Save this so that if we kill the program
+                # before we save that we don't lose booted instances...
+                maybe_servers.append(instance)
+                tracker['maybe_servers'] = maybe_servers
+                tracker.sync()
+                server = cloud.create_server(
+                    instance.name, instance.image,
+                    instance.flavor, auto_ip=False,
+                    key_name=args.key_name,
+                    availability_zone=instance.availability_zone,
+                    meta=create_meta(cloud), userdata=instance.userdata,
+                    wait=False)
+                server.kind = instance.kind
+                servers.append(server)
+                tracker['servers'] = servers
+                tracker.sync()
+    else:
+        print("  Spawning none.")
+    return servers
+
+
+def transform(helper):
+    """Turn (mostly) raw servers into useful things."""
+    helper.run_and_track(bind_hostnames, always_run=True)
+    helper.run_and_track(initial_prep_work)
+    helper.run_and_track(upload_repos)
+    helper.run_and_track(install_some_packages)
+    helper.run_and_track(clone_devstack)
+    helper.run_and_track(patch_devstack)
+    helper.run_and_track(upload_extras)
+    helper.run_and_track(create_local_files)
+    helper.run_and_track(run_stack)
+
+
+def create(args, cloud, tracker):
+    """Create a new environment."""
+    with utils.Spinner("Validating arguments against cloud", args.verbose):
+        # Due to some funkiness with our openstack we have to list out
+        # the az's and pick one, typically favoring ones with 'cor' in there
+        # name.
+        nc = cloud.nova_client
+        # TODO(harlowja): why can't we list details?
+        azs = [az.zoneName
+               for az in nc.availability_zones.list(detailed=False)]
+        if not azs:
+            raise RuntimeError(
+                    "Can not create instances in a cloud with no"
+                    " availability zones")
+        if args.key_name:
+            k = cloud.get_keypair(args.key_name)
+            if not k:
+                raise RuntimeError("Can not create instances with unknown"
+                                   " key name '%s'" % args.key_name)
+        if args.availability_zone:
+            if args.availability_zone not in azs:
+                raise RuntimeError(
+                    "Can not create instances in unknown"
+                    " availability zone '%s'" % args.availability_zone)
+            az_selector = lambda: args.availability_zone
         else:
-            print("Spawning instance %s, please wait..." % (name))
-            server = cloud.create_server(
-                details['name'], details['image'],
-                details['flavor'], auto_ip=False,
-                key_name=args.key_name,
-                availability_zone=details['availability_zone'],
-                meta=create_meta(cloud), userdata=details['user_data'],
-                wait=False)
-            tracker.record({'kind': 'server_create',
-                            'server': server, 'server_kind': kind})
-            servers[kind] = server
-            if args.verbose:
-                print("Instance spawn underway:")
-                blob = pprint.pformat(server)
-                for line in blob.splitlines():
-                    print("  " + line)
-            else:
-                print("Instance spawn underway.")
-    # Wait for them to actually become active...
-    print("Waiting for instances to become ACTIVE, please wait...")
-    for kind, server in servers.items():
-        with utils.Spinner("  Waiting for instance %s " % server.name):
-            server = cloud.wait_for_server(server, auto_ip=False)
-            server_ip = get_server_ip(server)
-            if not server_ip:
-                raise RuntimeError("Instance %s spawned but no ip"
-                                   " was found associated" % server.name)
-            server['ip'] = server_ip
-            servers[kind] = server
-    # Validate that we can connect into them.
-    print("Validating connectivity using %s threads,"
-          " please wait..." % len(servers))
-    futs = []
-    with futures.ThreadPoolExecutor(max_workers=len(servers)) as ex:
-        for kind, server in servers.items():
-            fut = ex.submit(utils.ssh_connect,
-                            server.ip, indent="  ",
-                            user=DEF_USER, password=DEF_PW,
-                            server_name=server.name)
-            futs.append((fut, kind, server))
-    try:
-        # Reform with the futures results...
-        servers = {}
-        for fut, kind, server in futs:
-            server.machine = fut.result()
-            servers[kind] = server
-        # Now turn those into something useful...
-        bind_hostnames(servers)
-        transform(args, cloud, tracker, servers)
-    finally:
-        # Ensure all machines opened (without error) are now closed.
-        while futs:
-            fut, _kind, server = futs.pop()
-            try:
-                machine = fut.result()
-            except Exception:
-                pass
-            else:
-                try:
-                    machine.close()
-                except Exception:
-                    LOG.exception("Failed closing ssh machine opened"
-                                  " to server %s at %s",
-                                  server.name, server.ip)
+            az_selector = make_az_selector(azs)
+        if args.image:
+            image = cloud.get_image(args.image)
+            if not image:
+                raise RuntimeError("Can not create instances with unknown"
+                                   " source image '%s'" % args.image)
+        else:
+            image_kind = images.ImageKind.CENT7
+            image = images.find_image(cloud, image_kind)
+            if not image:
+                raise RuntimeError("Can not create instances (unable to"
+                                   " locate a %s source"
+                                   " image)" % image_kind.name)
+        flavors = {}
+        for kind, kind_flv in DEF_FLAVORS.items():
+            flv = cloud.get_flavor(kind_flv)
+            if not flv:
+                raise RuntimeError("Can not create '%s' instances without"
+                                   " matching flavor '%s'" % (kind, kind_flv))
+            flavors[kind] = flv
+    # Create our topology and turn it into real servers...
+    topo = spawn_topo(args, cloud, tracker,
+                      create_topo(args, cloud, tracker), az_selector,
+                      flavors, image)
+    servers = wait_servers(args, cloud, tracker,
+                           bake_servers(args, cloud, tracker, topo))
+    # Now turn those servers into something useful...
+    with Helper(args, cloud, tracker,
+                servers, setup_settings(tracker)) as helper:
+        futs = []
+        with utils.Spinner("Validating connectivity"
+                           " using %s threads" % (len(servers)),
+                           args.verbose):
+            with futurist.ThreadPoolExecutor(max_workers=len(servers)) as ex:
+                for server in servers:
+                    fut = ex.submit(utils.ssh_connect,
+                                    server.ip, indent="  ",
+                                    user=DEF_USER, password=DEF_PW,
+                                    server_name=server.name,
+                                    verbose=args.verbose)
+                    futs.append((fut, server))
+        for fut, server in futs:
+            helper.match_machine(server.name, fut.result())
+        # And they said, turn it into a cloud...
+        transform(helper)

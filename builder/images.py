@@ -7,7 +7,7 @@ class ImageKind(enum.Enum):
     CENT7 = 'CENT7'
 
 
-def find_cent7_image(images):
+def _find_cent7_image(images):
     """Tries to find the centos7 images given a cloud instance."""
     possible_images = []
     for image in images:
@@ -35,6 +35,6 @@ def find_cent7_image(images):
 def find_image(cloud, kind):
     """Tries to find some images (of a given kind) given a cloud instance."""
     if kind == ImageKind.CENT7:
-        return find_cent7_image(cloud.list_images())
+        return _find_cent7_image(cloud.list_images())
     else:
         raise NotImplementedError("Unsupported image kind: %s" % (kind))

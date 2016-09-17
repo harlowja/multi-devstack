@@ -9,13 +9,15 @@ from __future__ import print_function
 
 import argparse
 import collections
+import hashlib
 import logging
 import os
+import shelve
 import sys
 import traceback
 
-import fasteners
 import shade
+import sqlitedict
 
 from builder import cows
 from builder import creator
@@ -28,10 +30,10 @@ TRACE = 5
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tracker",
-                        help="file to read/write action tracking"
+    parser.add_argument("--state",
+                        help="file to read/write action state"
                              " information into/from (default=%(default)s)",
-                        default=os.path.join(os.getcwd(), "tracker.log"),
+                        default=os.path.join(os.getcwd(), "state.sqlite"),
                         metavar="PATH")
     parser.add_argument("-v", "--verbose",
                         help=("run in verbose mode (may be specified more"
@@ -56,42 +58,35 @@ def main():
     else:
         # No options provided...
         logging.basicConfig(level=logging.WARN)
-
-    one_at_a_time = fasteners.InterProcessLock(".run_lock")
-    gotten = one_at_a_time.acquire(blocking=False)
-    if not gotten:
-        print("Only one instance of this application can run"
-              " at the same time.", file=sys.stderr)
+    try:
+        cloud = shade.openstack_cloud()
+        table_hasher = hashlib.new("md5")
+        table_hasher.update(cloud.auth['auth_url'])
+        table_hasher.update(cloud.auth['username'])
+        table_hasher.update(cloud.auth['project_name'])
+        with sqlitedict.SqliteDict(filename=args.state, flag='c',
+                                   tablename=table_hasher.hexdigest(),
+                                   autocommit=False) as tracker:
+            print("Action: '%s'" % (args.func.__doc__))
+            print("State: '%s'" % tracker.filename)
+            print("State table: '%s'" % tracker.tablename)
+            print("Cloud: ")
+            blob = pprint.pformat(collections.OrderedDict([
+                ('Authentication url', cloud.auth['auth_url']),
+                ('Authentication token', cloud.auth_token),
+                ('User', cloud.auth['username']),
+                ('Project', cloud.auth['project_name']),
+            ]))
+            for line in blob.splitlines():
+                print("  " + line)
+            args.func(args, cloud, tracker)
+    except Exception:
+        traceback.print_exc()
+        cows.goodbye(False)
         sys.exit(1)
     else:
-        try:
-            tracker = utils.Tracker(args.tracker)
-            tracker.open()
-            tracker.reload()
-            try:
-                cloud = shade.openstack_cloud()
-                print("Action: '%s'" % (args.func.__doc__))
-                print("Tracker: '%s'" % tracker.path)
-                print("Cloud: ")
-                blob = pprint.pformat(collections.OrderedDict([
-                    ('Authentication url', cloud.auth['auth_url']),
-                    ('Authentication token', cloud.auth_token),
-                    ('User', cloud.auth['username']),
-                    ('Project', cloud.auth['project_name']),
-                ]))
-                for line in blob.splitlines():
-                    print("  " + line)
-                args.func(args, cloud, tracker)
-            finally:
-                tracker.close()
-            cows.goodbye(True)
-            sys.exit(0)
-        except Exception:
-            traceback.print_exc()
-            cows.goodbye(False)
-            sys.exit(1)
-        finally:
-            one_at_a_time.release()
+        cows.goodbye(True)
+        sys.exit(0)
 
 
 if __name__ == '__main__':

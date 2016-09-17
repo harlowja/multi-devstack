@@ -3,12 +3,9 @@
 from __future__ import print_function
 
 from binascii import hexlify
-from datetime import datetime
-
 import errno
 import functools
 import itertools
-import json
 import os
 import random
 import socket
@@ -17,9 +14,8 @@ import sys
 import threading
 import time
 
-from concurrent import futures
 import contextlib2
-import munch
+import futurist
 
 from monotonic import monotonic as now
 import paramiko
@@ -33,40 +29,54 @@ PASS_CHARS = string.ascii_lowercase + string.digits
 
 
 class Spinner(object):
-    def __init__(self, msg=None, delay=0.3):
-        self._it = itertools.cycle(u"◐◓◑◒")
+    SPINNERS = tuple([
+        u"◐◓◑◒",
+        u"|/-\\",
+        u"◴◷◶◵",
+        u"◳◲◱◰",
+    ])
+
+    def __init__(self, message, verbose, delay=0.3):
+        self.verbose = verbose
+        self.message = message
+        self.delay = delay
+        self._it = itertools.cycle(random.choice(self.SPINNERS))
         self._t = None
-        self._msg = msg
-        self._delay = delay
         self._ev = threading.Event()
         self._dead = threading.Event()
         self._dead.set()
 
     def _runner(self):
-        msg_sent = False
-        output = 0
+        message_sent = False
+        output = False
         while not self._ev.is_set():
-            if self._msg is not None and not msg_sent:
-                sys.stdout.write(self._msg)
+            if not message_sent:
+                sys.stdout.write(self.message)
+                sys.stdout.write(" ")
                 sys.stdout.flush()
-                msg_sent = True
+                message_sent = True
             sys.stdout.write(six.next(self._it))
             sys.stdout.flush()
-            self._ev.wait(self._delay)
+            self._ev.wait(self.delay)
             sys.stdout.write('\b')
             sys.stdout.flush()
-            output += 1
-        if output:
+            output = True
+        if output or message_sent:
             sys.stdout.write("\n")
             sys.stdout.flush()
         self._dead.set()
 
     def start(self):
-        self._dead.clear()
-        self._ev.clear()
-        self._t = threading.Thread(target=self._runner)
-        self._t.daemon = True
-        self._t.start()
+        if not self.verbose:
+            self._dead.clear()
+            self._ev.clear()
+            self._t = threading.Thread(target=self._runner)
+            self._t.daemon = True
+            self._t.start()
+        else:
+            sys.stdout.write(self.message)
+            sys.stdout.write("...\n")
+            sys.stdout.flush()
 
     def stop(self):
         self._ev.set()
@@ -102,9 +112,10 @@ class RemoteCommand(object):
             self.server_name = server_name
         else:
             self.server_name = cmd.machine.host
+        self.on_done = kwargs.get('on_done')
 
 
-def safe_write_open(path, mode):
+def safe_open(path, mode):
     safe_make_dir(os.path.dirname(path))
     return open(path, mode)
 
@@ -126,7 +137,7 @@ def trim_it(block, max_len, reverse=False):
 
 def run_and_record(remote_cmds, indent="",
                    err_chop_len=1024, max_workers=None,
-                   wait_maker=None):
+                   verbose=True):
     def cmd_runner(remote_cmd, stdout_fh, stderr_fh):
         cmd = remote_cmd.cmd
         cmd_args = remote_cmd.cmd_args
@@ -138,7 +149,9 @@ def run_and_record(remote_cmds, indent="",
             if stderr:
                 print(stderr, file=stderr_fh)
                 stderr_fh.flush()
-        return (now() - t_start)
+        t_end = now()
+        if remote_cmd.on_done is not None:
+            remote_cmd.on_done(t_end - t_start)
     to_run = []
     ran = []
     with contextlib2.ExitStack() as e_stack:
@@ -151,10 +164,10 @@ def run_and_record(remote_cmds, indent="",
             print("%sRunning '%s' on server '%s'" % (indent, pretty_cmd,
                                                      remote_cmd.server_name))
             stderr_path = remote_cmd.stderr_record_path
-            stderr_fh = safe_write_open(stderr_path, 'a+b')
+            stderr_fh = safe_open(stderr_path, 'a+b')
             e_stack.callback(stderr_fh.close)
             stdout_path = remote_cmd.stdout_record_path
-            stdout_fh = safe_write_open(stdout_path, 'a+b')
+            stdout_fh = safe_open(stdout_path, 'a+b')
             e_stack.callback(stdout_fh.close)
             for (kind, filename) in [('stdout', stdout_fh.name),
                                      ('stderr', stderr_fh.name)]:
@@ -165,19 +178,12 @@ def run_and_record(remote_cmds, indent="",
                                              stdout_fh, stderr_fh)))
         if max_workers is None:
             max_workers = len(to_run)
-        if wait_maker is not None:
-            with wait_maker('Please wait '):
-                with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
-                    for (remote_cmd, run_func) in to_run:
-                        ran.append((remote_cmd, ex.submit(run_func)))
-        else:
-            print("Please wait...")
-            with futures.ThreadPoolExecutor(max_workers=max_workers) as ex:
+        with Spinner('Please wait', verbose=verbose):
+            with futurist.ThreadPoolExecutor(max_workers=max_workers) as ex:
                 for (remote_cmd, run_func) in to_run:
                     ran.append((remote_cmd, ex.submit(run_func)))
     fails = 0
     fail_buf = six.StringIO()
-    times = []
     for remote_cmd, fut in ran:
         fut_exc = fut.exception()
         if fut_exc is not None:
@@ -187,7 +193,7 @@ def run_and_record(remote_cmds, indent="",
                            " '%s' failed:\n" % (remote_cmd.server_name))
             if isinstance(fut_exc, plumbum.ProcessExecutionError):
                 fail_buf.write("  Due to process execution error:\n")
-                fail_buf.write("    Return/exit code: %s\n" % (fut_exc.retcode))
+                fail_buf.write("    Exit code: %s\n" % (fut_exc.retcode))
                 fail_buf.write("    Argv: %s\n" % (fut_exc.argv))
                 fail_buf.write("    Stdout:\n")
                 # The end is typically where the error is...
@@ -200,90 +206,9 @@ def run_and_record(remote_cmds, indent="",
                     fail_buf.write("      %s\n" % (line))
             else:
                 fail_buf.write("Due to unknown cause: %s\n" % fut_exc)
-        else:
-            times.append(fut.result())
     if fails:
         fail_buf = fail_buf.getvalue().rstrip()
         raise RemoteExecutionFailed(fail_buf)
-    return times
-
-
-class Tracker(object):
-    """Helper for tracking activities (and picking up where we left off)."""
-
-    def __init__(self, path):
-        self._path = path
-        self._fh = None
-        self._last_block = ()
-
-    def reload(self):
-        self._fh.seek(0)
-        records = []
-        contents = self._fh.read()
-        for line in contents.splitlines():
-            line = line.strip()
-            if line:
-                r = json.loads(line)
-                r = r['record']
-                r = munch.munchify(r)
-                records.append(r)
-        self._last_block = tuple(records)
-
-    @property
-    def last_block(self):
-        return self._last_block
-
-    @property
-    def path(self):
-        return self._path
-
-    def open(self):
-        if self._fh is None:
-            self._fh = open(self._path, 'a+')
-
-    def close(self):
-        if self._fh is not None:
-            self._fh.close()
-            self._fh = None
-        self._last_block = ()
-
-    def call_and_mark(self, func, *args, **kwargs):
-        kind = func.__name__
-        func_docs = getattr(func, '__doc__', '')
-        if func_docs:
-            print("Activating step '%s'" % (kind))
-            print("Details: '%s'" % func_docs)
-            print("Please wait...")
-        else:
-            print("Activating step '%s', please wait..." % (kind))
-        matches = self.search_last_using(lambda r: r.kind == kind)
-        if not matches:
-            result = func(*args, **kwargs)
-            self.record({'kind': kind, 'result': result})
-            print("Step has finished.")
-            return result
-        else:
-            print("Step has finished.")
-            return matches[-1]['result']
-
-    def search_last_using(self, matcher):
-        matches = []
-        for r in self._last_block:
-            if matcher(r):
-                matches.append(r)
-        return matches
-
-    def _write(self, record):
-        self._fh.write(json.dumps(record))
-        self._fh.write("\n")
-        self._fh.flush()
-
-    def record(self, record):
-        if self._fh is None:
-            raise IOError("Can not add a record on a unopened tracker")
-        self._write({'record': munch.unmunchify(record),
-                     'written_on': datetime.now().isoformat()})
-        self.reload()
 
 
 class IgnoreMissingHostKeyPolicy(paramiko.MissingHostKeyPolicy):
@@ -324,7 +249,7 @@ def safe_make_dir(a_dir):
 def ssh_connect(ip, connect_timeout=1.0,
                 max_backoff=60, max_attempts=12, indent="",
                 user=None, password=None,
-                server_name=None):
+                server_name=None, verbose=False):
     if server_name:
         display_name = server_name + " via " + ip
     else:
@@ -342,7 +267,9 @@ def ssh_connect(ip, connect_timeout=1.0,
         except (plumbum.machines.session.SSHCommsChannel2Error,
                 plumbum.machines.session.SSHCommsError, socket.error,
                 paramiko.ssh_exception.AuthenticationException) as e:
-            print("%sFailed to connect to %s: %s" % (indent, display_name, e))
+            if verbose:
+                print("%sFailed to connect to %s: %s" % (indent,
+                                                         display_name, e))
             backoff = min(max_backoff, 2 ** attempt)
             attempt += 1
             if attempt > max_attempts:
@@ -350,17 +277,19 @@ def ssh_connect(ip, connect_timeout=1.0,
                               " %s after %i attempts" % (display_name,
                                                          attempt - 1))
             more_attempts = max_attempts - attempt
-            print("%sTrying connect to %s again in"
-                  " %s seconds (%s attempts left)..." % (indent,
-                                                         display_name,
-                                                         backoff,
-                                                         more_attempts))
+            if verbose:
+                print("%sTrying connect to %s again in"
+                      " %s seconds (%s attempts left)..." % (indent,
+                                                             display_name,
+                                                             backoff,
+                                                             more_attempts))
             time.sleep(backoff)
         else:
             ended_at = now()
             time_taken = ended_at - started_at
-            print("%sSsh connected to"
-                  " %s (took %0.2f seconds)" % (indent,
-                                                display_name, time_taken))
+            if verbose:
+                print("%sSsh connected to"
+                      " %s (took %0.2f seconds)" % (indent,
+                                                    display_name, time_taken))
             connected = True
     return machine
