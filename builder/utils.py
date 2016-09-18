@@ -178,7 +178,7 @@ def run_and_record(remote_cmds, indent="",
                                              stdout_fh, stderr_fh)))
         if max_workers is None:
             max_workers = len(to_run)
-        with Spinner('Please wait', verbose=verbose):
+        with Spinner('%sPlease wait' % indent, verbose):
             with futurist.ThreadPoolExecutor(max_workers=max_workers) as ex:
                 for (remote_cmd, run_func) in to_run:
                     ran.append((remote_cmd, ex.submit(run_func)))
