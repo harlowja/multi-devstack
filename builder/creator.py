@@ -694,7 +694,7 @@ def create(args, cloud, tracker):
     # Now turn those servers into something useful...
     with Helper(args, cloud, tracker, servers) as helper:
         futs = []
-        with utils.Spinner("Validating connectivity"
+        with utils.Spinner("Validating ssh connectivity"
                            " using %s threads" % (len(servers)),
                            args.verbose):
             with futurist.ThreadPoolExecutor(max_workers=len(servers)) as ex:
