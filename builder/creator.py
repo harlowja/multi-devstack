@@ -89,10 +89,6 @@ class Helper(object):
             self._settings = settings
             return self._settings
 
-    def has_finished(self, func):
-        real_name = ":".join([func.__module__, func.__name__])
-        return real_name in self.tracker
-
     def run_and_track(self, func, always_run=False,
                       indent='', substep=None, store=None):
         step = munch.Munch({'store': store})
@@ -740,10 +736,6 @@ def create(args, cloud, tracker):
     # Now turn those servers into something useful...
     max_workers = min(MAX_WORKERS, len(servers))
     with Helper(args, cloud, tracker, servers) as helper:
-        if helper.has_finished(run_stack):
-            raise RuntimeError("We currently do not support re-stacking"
-                               " a cloud, so please `destroy` the current one"
-                               " before running")
         futs = []
         with utils.Spinner("Validating ssh connectivity"
                            " using %s threads" % (max_workers),
