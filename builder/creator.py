@@ -2,11 +2,10 @@ from __future__ import print_function
 
 import argparse
 import copy
+import itertools
 import logging
 import os
 import random
-
-from datetime import datetime
 
 import contextlib2
 import futurist
@@ -89,69 +88,68 @@ class Helper(object):
             self._settings = settings
             return self._settings
 
-    def run_cmds_and_track(self, remote_cmds,
+    def run_cmds_and_track(self, remote_cmds, servers,
                            indent='', on_prior=None,
                            verbose=True):
-        def on_done(remote_cmd, index):
-            cmd_name = self.CMD_PREFIX
-            cmd_name += str(remote_cmd)
-            self.tracker[cmd_name] = True
-            self.tracker.sync()
         to_run_cmds = []
-        for index, remote_cmd in enumerate(remote_cmds):
-            cmd_name = self.CMD_PREFIX
-            cmd_name += str(remote_cmd)
-            if cmd_name in self.tracker:
+        to_run_servers = []
+
+        def on_done(remote_cmd, index):
+            server = to_run_servers[index]
+            record = self.tracker[server.name]
+            record.cmds.add(str(remote_cmd))
+            self.tracker[server.name] = record
+            self.tracker.sync()
+
+        for server, remote_cmd in itertools.izip(servers, remote_cmds):
+            record = self.tracker[server.name]
+            cmd_name = str(remote_cmd)
+            if cmd_name in record.cmds:
                 if on_prior is not None:
-                    should_run = on_prior(remote_cmd, index)
+                    should_run = on_prior(server, remote_cmd)
                 else:
                     should_run = False
             else:
                 should_run = True
             if should_run:
                 to_run_cmds.append(remote_cmd)
+                to_run_servers.append(server)
+
         if to_run_cmds:
             max_workers = min(self.args.max_workers, len(to_run_cmds))
             utils.run_and_record(to_run_cmds, indent=indent,
                                  max_workers=max_workers,
                                  on_done=on_done, verbose=verbose)
 
-    def run_func_and_track(self, func, indent='', on_prior=None):
-        step = munch.Munch()
-        step.details = getattr(func, '__doc__', '')
-        step.name = self.FUNC_PREFIX
-        step.name += ":".join([func.__module__, func.__name__])
-        print("%sActivating step '%s'" % (indent, step.name))
-        try:
-            if step.details:
-                print("%s  Details: '%s'" % (indent, step.details))
-            if step.name in self.tracker:
-                if on_prior is not None:
-                    should_run = on_prior()
-                else:
-                    should_run = False
-            else:
-                should_run = True
-            if should_run:
-                start = utils.now()
-                result = func(self._args, self, indent=indent + "    ")
-                end = utils.now()
-                step.result = result
-                step.finished_on = datetime.utcnow()
-                step.elapsed = end - start
-                self.tracker[step.name] = step
+    def run_func_and_track(self, func, indent='', always_run=False):
+        func_details = getattr(func, '__doc__', '')
+        func_name = ":".join([func.__module__, func.__name__])
+        print("%sActivating step '%s'" % (indent, func_name))
+        if func_details:
+            print("%s  Details: '%s'" % (indent, func_details))
+        am_finished = 0
+        for server in self.servers:
+            record = self.tracker[server.name]
+            if func_name in record.funcs:
+                am_finished += 1
+        if am_finished == len(self.servers):
+            should_run = False
+        else:
+            should_run = True
+        if should_run or always_run:
+            start = utils.now()
+            func(self._args, self, indent=indent + "    ")
+            end = utils.now()
+            elapsed = end - start
+            print("%sStep '%s' has finished in"
+                  " %0.2f seconds" % (indent, func_name, elapsed))
+            for server in self.servers:
+                record = self.tracker[server.name]
+                record.funcs.add(func_name)
+                self.tracker[server.name] = record
                 self.tracker.sync()
-                print("%sStep '%s' has finished in"
-                      " %0.2f seconds" % (indent, step.name, step.elapsed))
-            else:
-                step = self.tracker[step.name]
-                print("%sStep '%s' was previously finished"
-                      " on %s" % (indent, step.name,
-                                  step.finished_on.isoformat()))
-                result = step.result
-        finally:
-            self.ongoing.pop()
-        return result
+        else:
+            print("%sStep '%s' was previously finished" % (indent, func_name))
 
     def iter_server_by_kind(self, kind):
         for server in self.servers:
@@ -357,9 +355,11 @@ def install_some_packages(args, helper, indent=''):
                 'mariadb',
                 record_path=record_path,
                 server_name=server.hostname))
-    utils.run_and_record(remote_cmds,
-                         verbose=args.verbose, indent=indent,
-                         max_workers=min(len(remote_cmds), args.max_workers))
+    if remote_cmds:
+        max_workers = min(len(remote_cmds), args.max_workers)
+        utils.run_and_record(remote_cmds,
+                             verbose=args.verbose, indent=indent,
+                             max_workers=max_workers)
     for server in hvs:
         machine = helper.machines[server.name]
         sudo = machine['sudo']
@@ -445,6 +445,7 @@ def run_stack(args, helper, indent=''):
     stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
     for group in [[Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV]]:
         run_cmds = []
+        servers = []
         for kind in group:
             for server in helper.iter_server_by_kind(kind):
                 machine = helper.machines[server.name]
@@ -454,8 +455,10 @@ def run_stack(args, helper, indent=''):
                     utils.RemoteCommand(
                         machine[stack_sh], record_path=record_path,
                         server_name=server.hostname))
+                servers.append(server)
         if run_cmds:
-            helper.run_cmds_and_track(run_cmds, indent=indent + "  ",
+            helper.run_cmds_and_track(run_cmds, servers,
+                                      indent=indent + "  ",
                                       verbose=args.verbose)
 
 
@@ -608,22 +611,21 @@ def create_topo(args, cloud, tracker):
 
 def bake_servers(args, cloud, tracker, topo):
     with utils.Spinner("Fetching existing servers", args.verbose):
-        made_servers = dict((server.name, server)
-                            for server in cloud.list_servers())
+        all_servers = dict((server.name, server)
+                           for server in cloud.list_servers())
     missing = []
     found = []
     servers = []
+    maybe_servers = tracker.get("maybe_servers", set())
     for instance in topo.values():
         try:
-            server = made_servers[instance.name]
+            server = all_servers[instance.name]
         except KeyError:
             missing.append(instance)
         else:
             found.append(instance)
             server.kind = instance.kind
             servers.append(server)
-            tracker['servers'] = servers
-            tracker.sync()
     if found:
         print("  Found:")
         for instance in found:
@@ -634,12 +636,11 @@ def bake_servers(args, cloud, tracker, topo):
         print("  Creating:")
         for instance in missing:
             print("    %s" % instance.name)
-        maybe_servers = tracker.get("maybe_servers", [])
         with utils.Spinner("  Spawning", args.verbose):
             for instance in missing:
                 # Save this so that if we kill the program
                 # before we save that we don't lose booted instances...
-                maybe_servers.append(instance)
+                maybe_servers.add(instance.name)
                 tracker['maybe_servers'] = maybe_servers
                 tracker.sync()
                 server = cloud.create_server(
@@ -651,16 +652,18 @@ def bake_servers(args, cloud, tracker, topo):
                     wait=False)
                 server.kind = instance.kind
                 servers.append(server)
-                tracker['servers'] = servers
-                tracker.sync()
     else:
         print("  Spawning none.")
+    for server in servers:
+        record = munch.Munch({'funcs': set(), 'cmds': set()})
+        tracker.setdefault(server.name, record)
+        tracker.sync()
     return servers
 
 
 def transform(helper):
     """Turn (mostly) raw servers into useful things."""
-    helper.run_func_and_track(bind_hostnames, on_prior=lambda: True)
+    helper.run_func_and_track(bind_hostnames, always_run=True)
     helper.run_func_and_track(initial_prep_work)
     helper.run_func_and_track(upload_repos)
     helper.run_func_and_track(install_some_packages)
