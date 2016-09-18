@@ -59,11 +59,12 @@ LOG = logging.getLogger(__name__)
 class Helper(object):
     """Conglomerate of things for our to-be/in-progress cloud."""
 
-    def __init__(self, args, cloud, tracker, servers):
+    def __init__(self, args, cloud, tracker, servers, rebuilt=False):
         self.servers = tuple(servers)
         self.machines = {}
         self.tracker = tracker
         self.cloud = cloud
+        self.rebuilt = rebuilt
         self._settings = None
         self._args = args
         self._exit_stack = contextlib2.ExitStack()
@@ -138,7 +139,8 @@ class Helper(object):
             print("%s  Details: '%s'" % (indent, func_details))
         last = self.tracker.get(func_name)
         if last is not None:
-            if on_prior is not None and on_prior(last.result):
+            if (self.rebuilt or
+                    (on_prior is not None and on_prior(last.result))):
                 last = None
         if last is None:
             start = utils.now()
@@ -591,7 +593,6 @@ def wait_servers(args, cloud, tracker, servers):
                                " was found associated" % server.name)
         server.ip = server_ip
         servers[i] = server
-    return servers
 
 
 def create_topo(args, cloud, tracker):
@@ -629,13 +630,33 @@ def create_topo(args, cloud, tracker):
     return make_topo
 
 
+def reconcile_servers(args, cloud, tracker,
+                      existing_servers, new_servers):
+    # If old servers existed, and new servers were created/added, then
+    # we need to figure out what to do about the old servers here, since
+    # typically they will not just work with any new servers...
+    if not existing_servers:
+        return False
+    if not new_servers:
+        return False
+    print("Performing reconciliation,"
+          " destroying %s existing servers." % (len(existing_servers)))
+    for server in existing_servers:
+        with utils.Spinner("Destroying"
+                           " server %s" % server.name, args.verbose):
+            cloud.delete_server(server.name, wait=True)
+        tracker.pop(server.name, None)
+        tracker.sync()
+    return True
+
+
 def bake_servers(args, cloud, tracker, topo):
     with utils.Spinner("Fetching existing servers", args.verbose):
         all_servers = dict((server.name, server)
                            for server in cloud.list_servers())
     missing = []
     found = []
-    servers = []
+    existing_servers = []
     maybe_servers = tracker.get("maybe_servers", set())
     for instance in topo.values():
         try:
@@ -645,7 +666,7 @@ def bake_servers(args, cloud, tracker, topo):
         else:
             found.append(instance)
             server.kind = instance.kind
-            servers.append(server)
+            existing_servers.append(server)
     if found:
         print("  Found:")
         for instance in found:
@@ -653,6 +674,7 @@ def bake_servers(args, cloud, tracker, topo):
     else:
         print("  Found none.")
     new_names = []
+    new_servers = []
     if missing:
         print("  Creating:")
         for instance in missing:
@@ -672,18 +694,18 @@ def bake_servers(args, cloud, tracker, topo):
                     meta=create_meta(cloud), userdata=instance.userdata,
                     wait=False)
                 server.kind = instance.kind
-                servers.append(server)
                 new_names.append(instance.name)
+                new_servers.append(server)
     else:
         print("  Spawning none.")
-    for server in servers:
+    for server in new_servers + existing_servers:
         record = munch.Munch({'cmds': {}})
         if server.name in new_names:
             tracker[server.name] = record
         else:
             record = tracker.setdefault(server.name, record)
         tracker.sync()
-    return servers
+    return existing_servers, new_servers
 
 
 def transform(helper):
@@ -748,11 +770,23 @@ def create(args, cloud, tracker):
     topo = spawn_topo(args, cloud, tracker,
                       create_topo(args, cloud, tracker), az_selector,
                       flavors, image)
-    servers = wait_servers(args, cloud, tracker,
-                           bake_servers(args, cloud, tracker, topo))
+    existing_servers, new_servers = bake_servers(args, cloud, tracker, topo)
+    needs_rebuild = reconcile_servers(args, cloud, tracker,
+                                      existing_servers, new_servers)
+    rebuilds = 0
+    while needs_rebuild:
+        rebuilds += 1
+        existing_servers, new_servers = bake_servers(args, cloud,
+                                                     tracker, topo)
+        needs_rebuild = reconcile_servers(args, cloud, tracker,
+                                          existing_servers, new_servers)
+    servers = list(existing_servers)
+    servers.extend(new_servers)
+    wait_servers(args, cloud, tracker, servers)
     # Now turn those servers into something useful...
     max_workers = min(args.max_workers, len(servers))
-    with Helper(args, cloud, tracker, servers) as helper:
+    with Helper(args, cloud, tracker,
+                servers, rebuilt=bool(rebuilds)) as helper:
         futs = []
         with utils.Spinner("Validating ssh connectivity"
                            " using %s threads" % (max_workers),
