@@ -27,12 +27,12 @@ be done:
         OS_USERNAME=jxharlow
         OS_TENANT_NAME=user-jxharlow
 
-3. Run the ``./build create`` python and watch the steps trigger that
+3. Run ``python builder create`` and watch the steps trigger that
    once successful will have build yourself a cluster.
 
    * If it fails after the ``stack.sh`` commands have started to
-     run **ensure to run** ``./build destroy`` before re-running because
-     those commands are not idempotent (the other actions are).
+     run **ensure to run** ``python builder destroy`` before re-running
+     because those commands are not idempotent (the other actions are).
 
 What it does (during create)
 ----------------------------
