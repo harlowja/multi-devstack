@@ -68,7 +68,6 @@ class Helper(object):
         self.tracker = tracker
         self.exit_stack = contextlib2.ExitStack()
         self.cloud = cloud
-        self.steps_ran = 0
         self._settings = None
         self._args = args
 
@@ -122,7 +121,6 @@ class Helper(object):
         step.details = getattr(func, '__doc__', '')
         step.name = self.FUNC_PREFIX
         step.name += ":".join([func.__module__, func.__name__])
-        self.steps_ran += 1
         print("%sActivating step '%s'" % (indent, step.name))
         try:
             if step.details:
