@@ -457,7 +457,7 @@ def create_local_files(helper, indent=''):
                                       "local.%s.conf" % server.hostname)
             tpl = template_fetcher("local.%s.tpl" % server.kind.value)
             tpl_contents = tpl.render(**params)
-            if not tpl_contents.endwith("\n"):
+            if not tpl_contents.endswith("\n"):
                 tpl_contents += "\n"
             with utils.safe_open(local_path, 'wb') as o_fh:
                 o_fh.write(tpl_contents)
