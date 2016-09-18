@@ -435,7 +435,7 @@ def run_stack(helper, indent=''):
 
 def create_local_files(helper, indent=''):
     """Creates and uploads all local.conf files for devstack."""
-    template_fetcher = helper.args.templates_fetcher
+    template_fetcher = helper.args.template_fetcher
     scratch_dir = helper.args.scratch_dir
     verbose = bool(helper.args.verbose)
     params = helper.settings.copy()
