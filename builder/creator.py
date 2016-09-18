@@ -53,7 +53,6 @@ DEF_TOPO = {
     Roles.HV: [],
 }
 HV_NAME_TPL = '%(user)s-hv-%(rand)s'
-MAX_WORKERS = 4
 LOG = logging.getLogger(__name__)
 
 
@@ -64,7 +63,6 @@ class Helper(object):
     FUNC_PREFIX = '$f$'
 
     def __init__(self, args, cloud, tracker, servers):
-        self.args = args
         self.servers = tuple(servers)
         self.machines = {}
         self.tracker = tracker
@@ -72,6 +70,7 @@ class Helper(object):
         self.cloud = cloud
         self.steps_ran = 0
         self._settings = None
+        self._args = args
 
     @property
     def settings(self):
@@ -113,7 +112,7 @@ class Helper(object):
             if should_run:
                 to_run_cmds.append(remote_cmd)
         if to_run_cmds:
-            max_workers = min(MAX_WORKERS, len(to_run_cmds))
+            max_workers = min(self.args.max_workers, len(to_run_cmds))
             utils.run_and_record(to_run_cmds, indent=indent,
                                  max_workers=max_workers,
                                  on_done=on_done, verbose=verbose)
@@ -137,7 +136,7 @@ class Helper(object):
                 should_run = True
             if should_run:
                 start = utils.now()
-                result = func(self, indent=indent + "    ")
+                result = func(self._args, self, indent=indent + "    ")
                 end = utils.now()
                 step.result = result
                 step.finished_on = datetime.utcnow()
@@ -204,6 +203,12 @@ def bind_subparser(subparsers):
                                help="number of hypervisors"
                                     " to spin up (default=%(default)s)",
                                default=2, type=pos_int,
+                               metavar='NUMBER')
+    parser_create.add_argument("--max-workers",
+                               help="maximum number of thread"
+                                    " workers to spin"
+                                    " up (default=%(default)s)",
+                               default=4, type=pos_int,
                                metavar='NUMBER')
     parser_create.add_argument("-a", "--availability-zone",
                                help="explicit availability"
@@ -302,7 +307,7 @@ def make_az_selector(azs):
     return az_selector
 
 
-def initial_prep_work(helper, indent=''):
+def initial_prep_work(args, helper, indent=''):
     """Performs some initial setup on the servers post-boot."""
     for server in helper.servers:
         machine = helper.machines[server.name]
@@ -314,29 +319,24 @@ def initial_prep_work(helper, indent=''):
         git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
 
 
-def clone_devstack(helper, indent=''):
+def clone_devstack(args, helper, indent=''):
     """Clears prior devstack and clones devstack + adjusts branch."""
-    git_source = helper.args.source
-    git_branch = helper.args.branch
-    verbose = bool(helper.args.verbose)
     print("%sCloning devstack:" % (indent))
-    print("%s  Source: %s" % (indent, git_source))
-    print("%s  Branch: %s" % (indent, git_branch))
+    print("%s  Source: %s" % (indent, args.source))
+    print("%s  Branch: %s" % (indent, args.branch))
     for server in helper.servers:
         machine = helper.machines[server.name]
         with utils.Spinner("%sCloning devstack"
-                           " in %s" % (indent, server.hostname), verbose):
+                           " in %s" % (indent, server.hostname), args.verbose):
             rm = machine["rm"]
             rm("-rf", "devstack")
             git = machine['git']
-            git("clone", git_source)
-            git('checkout', git_branch, cwd="devstack")
+            git("clone", args.source)
+            git('checkout', args.branch, cwd="devstack")
 
 
-def install_some_packages(helper, indent=''):
+def install_some_packages(args, helper, indent=''):
     """Installs a few prerequisite packages on the various servers."""
-    scratch_dir = helper.args.scratch_dir
-    verbose = bool(helper.args.verbose)
     remote_cmds = []
     hvs = list(helper.iter_server_by_kind(Roles.HV))
     maps = list(helper.iter_server_by_kind(Roles.MAP))
@@ -345,7 +345,7 @@ def install_some_packages(helper, indent=''):
         machine = helper.machines[server.name]
         sudo = machine['sudo']
         yum = sudo[machine['yum']]
-        record_path = os.path.join(scratch_dir,
+        record_path = os.path.join(args.scratch_dir,
                                    "%s.yum_install" % (server.hostname))
         remote_cmds.append(
             utils.RemoteCommand(
@@ -360,14 +360,14 @@ def install_some_packages(helper, indent=''):
                 record_path=record_path,
                 server_name=server.hostname))
     utils.run_and_record(remote_cmds,
-                         verbose=verbose, indent=indent,
-                         max_workers=min(len(remote_cmds), MAX_WORKERS))
+                         verbose=args.verbose, indent=indent,
+                         max_workers=min(len(remote_cmds), args.max_workers))
     for server in hvs:
         machine = helper.machines[server.name]
         sudo = machine['sudo']
         yum = sudo[machine['yum']]
         service = sudo[machine['service']]
-        record_path = os.path.join(scratch_dir,
+        record_path = os.path.join(args.scratch_dir,
                                    "%s.yum_install" % (server.hostname))
         utils.run_and_record([
             utils.RemoteCommand(
@@ -377,27 +377,25 @@ def install_some_packages(helper, indent=''):
                 'openvswitch',
                 record_path=record_path,
                 server_name=server.hostname)
-        ], verbose=verbose, indent=indent)
+        ], verbose=args.verbose, indent=indent)
         service('openvswitch', 'restart')
 
 
-def upload_repos(helper, indent=''):
+def upload_repos(args, helper, indent=''):
     """Uploads all repos.d files into corresponding repos.d directory."""
-    repos_path = os.path.abspath(helper.args.repos)
-    verbose = bool(helper.args.verbose)
     for server in helper.servers:
         file_names = [file_name
-                      for file_name in os.listdir(repos_path)
+                      for file_name in os.listdir(args.repos)
                       if file_name.endswith(".repo")]
         if file_names:
             machine = helper.machines[server.name]
             with utils.Spinner("%sUploading %s repos.d file/s to"
                                " %s" % (indent, len(file_names),
-                                        server.hostname), verbose):
+                                        server.hostname), args.verbose):
                 for file_name in file_names:
                     target_path = "/etc/yum.repos.d/%s" % (file_name)
                     tpm_path = "/tmp/%s" % (file_name)
-                    local_path = os.path.join(repos_path, file_name)
+                    local_path = os.path.join(args.repos, file_name)
                     machine.upload(local_path, tpm_path)
                     sudo = machine['sudo']
                     mv = sudo[machine['mv']]
@@ -406,59 +404,53 @@ def upload_repos(helper, indent=''):
                     yum('clean', 'all')
 
 
-def patch_devstack(helper, indent=''):
+def patch_devstack(args, helper, indent=''):
     """Applies local devstack patches to cloned devstack."""
-    patches_path = os.path.abspath(helper.args.patches)
-    verbose = bool(helper.args.verbose)
     for server in helper.servers:
         file_names = [file_name
-                      for file_name in os.listdir(patches_path)
+                      for file_name in os.listdir(args.patches)
                       if file_name.endswith(".patch")]
         if file_names:
             machine = helper.machines[server.name]
             with utils.Spinner("%sUploading (and applying) %s patch file/s to"
                                " %s" % (indent, len(file_names),
-                                        server.hostname), verbose):
+                                        server.hostname), args.verbose):
                 for file_name in file_names:
                     target_path = "/home/%s/devstack/%s" % (DEF_USER,
                                                             file_name)
-                    local_path = os.path.join(patches_path, file_name)
+                    local_path = os.path.join(args.patches, file_name)
                     machine.upload(local_path, target_path)
                     git = machine['git']
                     git("am", file_name, cwd='devstack')
 
 
-def upload_extras(helper, indent=''):
+def upload_extras(args, helper, indent=''):
     """Uploads all extras.d files into corresponding devstack directory."""
-    extras_path = os.path.abspath(helper.args.extras)
-    verbose = bool(helper.args.verbose)
     for server in helper.servers:
         file_names = [file_name
-                      for file_name in os.listdir(extras_path)
+                      for file_name in os.listdir(args.extras)
                       if file_name.endswith(".sh")]
         if file_names:
             machine = helper.machines[server.name]
             with utils.Spinner("%sUploading %s extras.d file/s to"
                                " %s" % (indent, len(file_names),
-                                        server.hostname), verbose):
+                                        server.hostname), args.verbose):
                 for file_name in file_names:
                     target_path = "/home/%s/devstack/extras.d/%s" % (DEF_USER,
                                                                      file_name)
-                    local_path = os.path.join(extras_path, file_name)
+                    local_path = os.path.join(args.extras, file_name)
                     machine.upload(local_path, target_path)
 
 
-def run_stack(helper, indent=''):
+def run_stack(args, helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
-    scratch_dir = helper.args.scratch_dir
-    verbose = bool(helper.args.verbose)
     stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
     for group in [[Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV]]:
         run_cmds = []
         for kind in group:
             for server in helper.iter_server_by_kind(kind):
                 machine = helper.machines[server.name]
-                record_path = os.path.join(scratch_dir,
+                record_path = os.path.join(args.scratch_dir,
                                            "%s.stack" % server.hostname)
                 run_cmds.append(
                     utils.RemoteCommand(
@@ -466,14 +458,12 @@ def run_stack(helper, indent=''):
                         server_name=server.hostname))
         if run_cmds:
             helper.run_cmds_and_track(run_cmds, indent=indent + "  ",
-                                      verbose=verbose)
+                                      verbose=args.verbose)
 
 
-def create_local_files(helper, indent=''):
+def create_local_files(args, helper, indent=''):
     """Creates and uploads all local.conf files for devstack."""
-    template_fetcher = helper.args.template_fetcher
-    scratch_dir = helper.args.scratch_dir
-    verbose = bool(helper.args.verbose)
+    template_fetcher = args.template_fetcher
     params = helper.settings.copy()
     # This needs to be done so that servers that will not have rabbit
     # or the database on them (but need to access it will still have
@@ -488,8 +478,8 @@ def create_local_files(helper, indent=''):
     for server in helper.servers:
         machine = helper.machines[server.name]
         with utils.Spinner("%sUploading local.conf to"
-                           " %s" % (indent, server.hostname), verbose):
-            local_path = os.path.join(scratch_dir,
+                           " %s" % (indent, server.hostname), args.verbose):
+            local_path = os.path.join(args.scratch_dir,
                                       "local.%s.conf" % server.hostname)
             tpl = template_fetcher("local.%s.tpl" % server.kind.value)
             tpl_contents = tpl.render(**params)
@@ -500,7 +490,7 @@ def create_local_files(helper, indent=''):
             machine.upload(local_path, target_path)
 
 
-def bind_hostnames(helper, indent=''):
+def bind_hostnames(args, helper, indent=''):
     """Attaches fully qualified hostnames to server objects."""
     for server in helper.servers:
         machine = helper.machines[server.name]
@@ -735,7 +725,7 @@ def create(args, cloud, tracker):
     servers = wait_servers(args, cloud, tracker,
                            bake_servers(args, cloud, tracker, topo))
     # Now turn those servers into something useful...
-    max_workers = min(MAX_WORKERS, len(servers))
+    max_workers = min(args.max_workers, len(servers))
     with Helper(args, cloud, tracker, servers) as helper:
         futs = []
         with utils.Spinner("Validating ssh connectivity"
