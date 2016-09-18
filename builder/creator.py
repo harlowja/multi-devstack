@@ -775,9 +775,8 @@ def create(args, cloud, tracker):
     topo = spawn_topo(args, cloud, tracker,
                       create_topo(args, cloud, tracker), az_selector,
                       flavors, image)
-    brand_new_names = set()
     existing_servers, new_servers = bake_servers(args, cloud, tracker, topo)
-    brand_new_names.update([server.name for server in new_servers])
+    new_server_names = set(server.name for server in new_servers)
     needs_rebuild = reconcile_servers(args, cloud, tracker,
                                       existing_servers, new_servers)
     rebuilds = 0
@@ -788,10 +787,10 @@ def create(args, cloud, tracker):
         # Shift over already previously created new servers into the
         # new servers category (and out of the existing servers)
         # category.
-        brand_new_names.update([server.name for server in new_servers])
+        new_server_names.update(server.name for server in new_servers)
         tmp_existing_servers = []
         for server in existing_servers:
-            if server.name in brand_new_names:
+            if server.name in new_server_names:
                 new_servers.append(server)
             else:
                 tmp_existing_servers.append(server)
@@ -803,7 +802,7 @@ def create(args, cloud, tracker):
     # Add records for all servers (new or old).
     for server in servers:
         record = munch.Munch({'cmds': {}})
-        record = tracker.setdefault(server.name, record)
+        tracker.setdefault(server.name, record)
         tracker.sync()
     wait_servers(args, cloud, tracker, servers)
     # Now turn those servers into something useful...
