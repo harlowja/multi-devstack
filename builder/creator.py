@@ -630,6 +630,7 @@ def bake_servers(args, cloud, tracker, topo):
             print("    %s" % instance.name)
     else:
         print("  Found none.")
+    new_names = []
     if missing:
         print("  Creating:")
         for instance in missing:
@@ -650,11 +651,15 @@ def bake_servers(args, cloud, tracker, topo):
                     wait=False)
                 server.kind = instance.kind
                 servers.append(server)
+                new_names.append(instance.name)
     else:
         print("  Spawning none.")
     for server in servers:
         record = munch.Munch({'funcs': set(), 'cmds': set()})
-        tracker.setdefault(server.name, record)
+        if server.name in new_names:
+            tracker[server.name] = record
+        else:
+            tracker.setdefault(server.name, record)
         tracker.sync()
     return servers
 
