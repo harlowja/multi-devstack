@@ -102,7 +102,7 @@ class Helper(object):
                 raise ValueError("Can not start a substep with"
                                  " zero active steps underway")
             step.base_name = str(substep)
-            step.real_name = ".".join(s.base_name for s in self.ongoing)
+            step.real_name = "/".join(s.base_name for s in self.ongoing)
             step.real_name += "." + step.base_name
             step.is_substep = True
         else:
