@@ -1,6 +1,6 @@
-=====================================
-A somewhat ghetto multi-node devstack
-=====================================
+=======================================
+A python-based multi-node devstack tool
+=======================================
 
 Made by people that care.
 
