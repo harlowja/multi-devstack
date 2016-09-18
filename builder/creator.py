@@ -68,6 +68,8 @@ class Helper(object):
         self.exit_stack = contextlib2.ExitStack()
         self.cloud = cloud
         self.steps_ran = 0
+        self._ongoing_steps = []
+        self._ongoing_names = []
         self._settings = None
 
     @property
@@ -93,34 +95,55 @@ class Helper(object):
         return store_name in self.tracker
 
     def run_and_track(self, func, always_run=False, indent='', substep=None):
-        step = str(self.steps_ran + 1)
         if substep is not None:
-            step = "%s.%s" % (step, substep)
-        print("%sActivating step %s." % (indent, step))
-        if substep is None:
-            self.steps_ran += 1
-        print("%s  Name: '%s'" % (indent, func.__name__))
-        func_details = getattr(func, '__doc__', '')
-        if func_details:
-            print("%s  Details: '%s'" % (indent, func_details))
-        store_name = ":".join([func.__module__, func.__name__])
-        if substep is not None:
-            store_name += ".%s" % substep
-        print("%s  Stored under: '%s'" % (indent, store_name))
-        if store_name not in self.tracker or always_run:
-            t_start = utils.now()
-            result = func(self, indent=indent + "    ")
-            t_end = utils.now()
-            t_elapsed = t_end - t_start
-            self.tracker[store_name] = (result, datetime.utcnow(), t_elapsed)
-            self.tracker.sync()
-            print('%sStep %s has finished in %0.2f seconds' % (indent, step,
-                                                               t_elapsed))
+            if not self._ongoing_steps:
+                raise ValueError("Can not start a substep with"
+                                 " zero active steps underway")
+            base_step = ".".join(self._ongoing_steps)
+            step = "%s.%s" % (base_step, substep)
+            self._ongoing_steps.append(substep)
+            print("%sActivating substep %s." % (indent, step))
         else:
-            result, finished_on, t_elapsed = self.tracker[store_name]
-            print('%sStep %s was previously'
-                  ' finished on %s' % (indent, step,
-                                       finished_on.isoformat()))
+            if self._ongoing_steps:
+                raise ValueError("Can not start a step with"
+                                 " non-zero active step underway")
+            step = str(self.steps_ran + 1)
+            print("%sActivating step %s." % (indent, step))
+            self._ongoing_steps.append(step)
+            self.steps_ran += 1
+        try:
+            print("%s  Name: '%s'" % (indent, func.__name__))
+            func_details = getattr(func, '__doc__', '')
+            if func_details:
+                print("%s  Details: '%s'" % (indent, func_details))
+            if substep is not None:
+                base_store_name = "/".join(self._ongoing_names)
+                store_name = base_store_name + "/" + substep
+                self._ongoing_names.append(substep)
+            else:
+                store_name = ":".join([func.__module__, func.__name__])
+                self._ongoing_names.append(store_name)
+            print("%s  Stored under: '%s'" % (indent, store_name))
+            try:
+                if store_name not in self.tracker or always_run:
+                    t_start = utils.now()
+                    result = func(self, indent=indent + "    ")
+                    t_end = utils.now()
+                    t_elapsed = t_end - t_start
+                    self.tracker[store_name] = (result,
+                                                datetime.utcnow(), t_elapsed)
+                    self.tracker.sync()
+                    print('%sStep %s has finished in'
+                          ' %0.2f seconds' % (indent, step, t_elapsed))
+                else:
+                    result, finished_on, t_elapsed = self.tracker[store_name]
+                    print('%sStep %s was previously'
+                          ' finished on %s' % (indent, step,
+                                               finished_on.isoformat()))
+            finally:
+                self._ongoing_names.pop()
+        finally:
+            self._ongoing_steps.pop()
         return result
 
     def iter_server_by_kind(self, kind):
@@ -417,35 +440,30 @@ def upload_extras(helper, indent=''):
 
 def run_stack(helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
-    stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
-    scratch_dir = helper.args.scratch_dir
-    verbose = bool(helper.args.verbose)
-    # We can do these in parallel...
-    rbs = list(helper.iter_server_by_kind(Roles.RB))
-    dbs = list(helper.iter_server_by_kind(Roles.DB))
-    remote_cmds = []
-    for server in rbs + dbs:
+
+    def make_runner(server):
+        stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
+        verbose = bool(helper.args.verbose)
         machine = helper.machines[server.name]
-        cmd = machine[stack_sh]
+        scratch_dir = helper.args.scratch_dir
         record_path = os.path.join(scratch_dir, "%s.stack" % server.hostname)
-        remote_cmds.append(
-            utils.RemoteCommand(cmd, record_path=record_path,
-                                server_name=server.hostname))
-    utils.run_and_record(remote_cmds,
-                         verbose=verbose, indent=indent,
-                         max_workers=min(MAX_WORKERS, len(remote_cmds)))
+        cmd = machine[stack_sh]
+
+        def run_one_stack(helper, indent=''):
+            utils.run_and_record([
+                utils.RemoteCommand(cmd, record_path=record_path,
+                                    server_name=server.hostname)
+            ], verbose=verbose, indent=indent)
+
+        run_one_stack.__doc__ = "Activates stack.sh on %s" % server.name
+        return run_one_stack
+
     # Order matters here...
-    maps = list(helper.iter_server_by_kind(Roles.MAP))
-    caps = list(helper.iter_server_by_kind(Roles.CAP))
-    hvs = list(helper.iter_server_by_kind(Roles.HV))
-    for server in maps + caps + hvs:
-        machine = helper.machines[server.name]
-        cmd = machine[stack_sh]
-        record_path = os.path.join(scratch_dir, "%s.stack" % server.hostname)
-        utils.run_and_record([
-            utils.RemoteCommand(cmd, record_path=record_path,
-                                server_name=server.hostname)
-        ], verbose=verbose, indent=indent)
+    for kind in [Roles.RB, Roles.DB, Roles.MAP, Roles.CAP, Roles.HV]:
+        for server in helper.iter_server_by_kind(kind):
+            substep = "%s@%s" % (kind.name, server.name)
+            helper.run_and_track(make_runner(server), indent=indent + "  ",
+                                 substep=substep)
 
 
 def create_local_files(helper, indent=''):
