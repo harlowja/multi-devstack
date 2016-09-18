@@ -440,12 +440,12 @@ def upload_extras(helper, indent=''):
 
 def run_stack(helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
+    scratch_dir = helper.args.scratch_dir
+    verbose = bool(helper.args.verbose)
+    stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
 
     def make_runner(server):
-        stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
-        verbose = bool(helper.args.verbose)
         machine = helper.machines[server.name]
-        scratch_dir = helper.args.scratch_dir
         record_path = os.path.join(scratch_dir, "%s.stack" % server.hostname)
         cmd = machine[stack_sh]
 
