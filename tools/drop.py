@@ -37,7 +37,7 @@ def main():
                     pass
                 else:
                     for c in args.command:
-                        record.cmds.discard(c)
+                        record.cmds.pop(c, None)
                     tracker[server_name] = record
                     tracker.sync()
 
