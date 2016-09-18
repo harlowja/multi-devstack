@@ -25,8 +25,14 @@ def main():
     with sqlitedict.SqliteDict(filename=args.state, flag='c',
                                tablename=args.table,
                                autocommit=False) as tracker:
-        for f in args.func:
-            tracker.pop(f, None)
+        try:
+            funcs = tracker['funcs']
+        except KeyError:
+            pass
+        else:
+            for f in args.func:
+                funcs.pop(f, None)
+            tracker['funcs'] = funcs
             tracker.sync()
         if args.command:
             maybe_servers = tracker.get("maybe_servers", [])

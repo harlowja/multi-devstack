@@ -60,12 +60,11 @@ LOG = logging.getLogger(__name__)
 class Helper(object):
     """Conglomerate of things for our to-be/in-progress cloud."""
 
-    def __init__(self, args, cloud, tracker, servers, rebuilt=False):
+    def __init__(self, args, cloud, tracker, servers):
         self.servers = tuple(servers)
         self.machines = {}
         self.tracker = tracker
         self.cloud = cloud
-        self.rebuilt = rebuilt
         self._settings = None
         self._args = args
         self._exit_stack = contextlib2.ExitStack()
@@ -138,10 +137,10 @@ class Helper(object):
         print("%sActivating function '%s'" % (indent, func_name))
         if func_details:
             print("%s  Details: '%s'" % (indent, func_details))
-        last = self.tracker.get(func_name)
+        funcs = self.tracker['funcs']
+        last = funcs.get(func_name)
         if last is not None:
-            if (self.rebuilt or
-                    (on_prior is not None and on_prior(last.result))):
+            if on_prior is not None and on_prior(last.result):
                 last = None
         if last is None:
             start = utils.now()
@@ -154,8 +153,11 @@ class Helper(object):
             elapsed = end - start
             print("%sFunction '%s' has finished in"
                   " %0.2f seconds" % (indent, func_name, elapsed))
-            self.tracker[func_name] = last = munch.Munch(result=result,
-                                                         elapsed=elapsed)
+            last = munch.Munch(result=result,
+                               elapsed=elapsed,
+                               details=func_details)
+            funcs[func_name] = last
+            self.tracker['funcs'] = funcs
             self.tracker.sync()
             return last.result
         else:
@@ -656,6 +658,9 @@ def reconcile_servers(args, cloud, tracker,
                                " server %s" % server.name, args.verbose):
                 cloud.delete_server(server.name, wait=True)
             tracker.pop(server.name)
+            # We can no longer depend on funcs previously ran
+            # being accurate, so destroy them...
+            tracker.pop("funcs", None)
             tracker.sync()
         return True
     else:
@@ -779,9 +784,7 @@ def create(args, cloud, tracker):
     new_server_names = set(server.name for server in new_servers)
     needs_rebuild = reconcile_servers(args, cloud, tracker,
                                       existing_servers, new_servers)
-    rebuilds = 0
     while needs_rebuild:
-        rebuilds += 1
         existing_servers, new_servers = bake_servers(args, cloud,
                                                      tracker, topo)
         # Shift over already previously created new servers into the
@@ -797,18 +800,20 @@ def create(args, cloud, tracker):
         existing_servers = tmp_existing_servers
         needs_rebuild = reconcile_servers(args, cloud, tracker,
                                           existing_servers, new_servers)
-    servers = list(existing_servers)
+    servers = existing_servers
     servers.extend(new_servers)
     # Add records for all servers (new or old).
     for server in servers:
         record = munch.Munch({'cmds': {}})
         tracker.setdefault(server.name, record)
         tracker.sync()
+    # Add records for funcs (if not already there).
+    tracker.setdefault('funcs', {})
+    tracker.sync()
     wait_servers(args, cloud, tracker, servers)
     # Now turn those servers into something useful...
     max_workers = min(args.max_workers, len(servers))
-    with Helper(args, cloud, tracker,
-                servers, rebuilt=bool(rebuilds)) as helper:
+    with Helper(args, cloud, tracker, servers) as helper:
         futs = []
         with utils.Spinner("Validating ssh connectivity"
                            " using %s threads" % (max_workers),
