@@ -6,5 +6,6 @@ if [ -z "$python" ]; then
   exit 1
 fi
 
+export PROGRAM_NAME="$0"
 $python builder $@
 exit $?

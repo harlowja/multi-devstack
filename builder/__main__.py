@@ -25,7 +25,9 @@ TRACE = 5
 
 
 def main():
-    parser = argparse.ArgumentParser()
+    prog_name = os.getenv("PROGRAM_NAME", default=sys.argv[0])
+    prog_name = os.path.basename(prog_name)
+    parser = argparse.ArgumentParser(prog=prog_name)
     parser.add_argument("--state",
                         help="file to read/write action state"
                              " information into/from (default=%(default)s)",
