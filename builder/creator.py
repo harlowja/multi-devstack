@@ -97,6 +97,7 @@ class Helper(object):
         if func_details:
             print("%s  Details: '%s'" % (indent, func_details))
         store_name = ":".join([func.__module__, func.__name__])
+        print("%s  Stored under: '%s'" % (indent, store_name))
         if store_name not in self.tracker or always_run:
             t_start = utils.now()
             result = func(self, indent=indent + "    ")
