@@ -25,19 +25,21 @@ def main():
     with sqlitedict.SqliteDict(filename=args.state, flag='c',
                                tablename=args.table,
                                autocommit=False) as tracker:
-        maybe_servers = tracker.get("maybe_servers", [])
-        for server_name in maybe_servers:
-            try:
-                record = tracker[server_name]
-            except KeyError:
-                pass
-            else:
-                for f in args.func:
-                    record.funcs.discard(f)
-                for c in args.command:
-                    record.cmds.discard(c)
-                tracker[server_name] = record
-                tracker.sync()
+        for f in args.func:
+            tracker.pop(f, None)
+            tracker.sync()
+        if args.command:
+            maybe_servers = tracker.get("maybe_servers", [])
+            for server_name in maybe_servers:
+                try:
+                    record = tracker[server_name]
+                except KeyError:
+                    pass
+                else:
+                    for c in args.command:
+                        record.cmds.discard(c)
+                    tracker[server_name] = record
+                    tracker.sync()
 
 
 if __name__ == '__main__':

@@ -36,3 +36,6 @@ def destroy(args, cloud, tracker):
                         cloud.delete_server(server_name, wait=True)
             tracker['maybe_servers'] = maybe_servers
             tracker.sync()
+    # Clear off the functions that were also invoked...
+    tracker.clear()
+    tracker.sync()

@@ -58,9 +58,6 @@ LOG = logging.getLogger(__name__)
 class Helper(object):
     """Conglomerate of things for our to-be/in-progress cloud."""
 
-    CMD_PREFIX = '$c$'
-    FUNC_PREFIX = '$f$'
-
     def __init__(self, args, cloud, tracker, servers):
         self.servers = tuple(servers)
         self.machines = {}
@@ -97,13 +94,13 @@ class Helper(object):
         def on_done(remote_cmd, index):
             server = to_run_servers[index]
             record = self.tracker[server.name]
-            record.cmds.add(str(remote_cmd))
+            record.cmds.add(remote_cmd.name)
             self.tracker[server.name] = record
             self.tracker.sync()
 
         for server, remote_cmd in itertools.izip(servers, remote_cmds):
             record = self.tracker[server.name]
-            cmd_name = str(remote_cmd)
+            cmd_name = remote_cmd.name
             if cmd_name in record.cmds:
                 if on_prior is not None:
                     should_run = on_prior(server, remote_cmd)
@@ -121,35 +118,35 @@ class Helper(object):
                                  max_workers=max_workers,
                                  on_done=on_done, verbose=verbose)
 
-    def run_func_and_track(self, func, indent='', always_run=False):
+    def run_func_and_track(self, func, indent='', on_prior=None):
         func_details = getattr(func, '__doc__', '')
         func_name = ":".join([func.__module__, func.__name__])
-        print("%sActivating step '%s'" % (indent, func_name))
+        print("%sActivating function '%s'" % (indent, func_name))
         if func_details:
             print("%s  Details: '%s'" % (indent, func_details))
-        am_finished = 0
-        for server in self.servers:
-            record = self.tracker[server.name]
-            if func_name in record.funcs:
-                am_finished += 1
-        if am_finished == len(self.servers):
-            should_run = False
-        else:
-            should_run = True
-        if should_run or always_run:
+        last = self.tracker.get(func_name)
+        if last is not None:
+            if on_prior is not None and on_prior(last.result):
+                last = None
+        if last is None:
             start = utils.now()
-            func(self._args, self, indent=indent + "    ")
+            if func_details:
+                tmp_indent = indent + "    "
+            else:
+                tmp_indent = indent + "  "
+            result = func(self._args, self, indent=tmp_indent)
             end = utils.now()
             elapsed = end - start
-            print("%sStep '%s' has finished in"
+            print("%sFunction '%s' has finished in"
                   " %0.2f seconds" % (indent, func_name, elapsed))
-            for server in self.servers:
-                record = self.tracker[server.name]
-                record.funcs.add(func_name)
-                self.tracker[server.name] = record
-                self.tracker.sync()
+            self.tracker[func_name] = last = munch.Munch(result=result,
+                                                         elapsed=elapsed)
+            self.tracker.sync()
+            return last.result
         else:
-            print("%sStep '%s' was previously finished" % (indent, func_name))
+            print("%sFunction '%s' was previously finished" % (indent,
+                                                               func_name))
+            return last.result
 
     def iter_server_by_kind(self, kind):
         for server in self.servers:
@@ -443,6 +440,13 @@ def upload_extras(args, helper, indent=''):
 def run_stack(args, helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
     stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
+
+    def on_prior(server, remote_cmd):
+        print("%sServer %s already %s, this may not end well as"
+              " stack.sh is not idempotent..." % (indent, server.name,
+                                                  stack_sh))
+        return False
+
     for group in [[Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV]]:
         run_cmds = []
         servers = []
@@ -459,7 +463,8 @@ def run_stack(args, helper, indent=''):
         if run_cmds:
             helper.run_cmds_and_track(run_cmds, servers,
                                       indent=indent + "  ",
-                                      verbose=args.verbose)
+                                      verbose=args.verbose,
+                                      on_prior=on_prior)
 
 
 def create_local_files(args, helper, indent=''):
@@ -655,18 +660,18 @@ def bake_servers(args, cloud, tracker, topo):
     else:
         print("  Spawning none.")
     for server in servers:
-        record = munch.Munch({'funcs': set(), 'cmds': set()})
+        record = munch.Munch({'cmds': set()})
         if server.name in new_names:
             tracker[server.name] = record
         else:
-            tracker.setdefault(server.name, record)
+            record = tracker.setdefault(server.name, record)
         tracker.sync()
     return servers
 
 
 def transform(helper):
     """Turn (mostly) raw servers into useful things."""
-    helper.run_func_and_track(bind_hostnames, always_run=True)
+    helper.run_func_and_track(bind_hostnames, on_prior=lambda result: True)
     helper.run_func_and_track(initial_prep_work)
     helper.run_func_and_track(upload_repos)
     helper.run_func_and_track(install_some_packages)

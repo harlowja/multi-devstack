@@ -112,9 +112,10 @@ class RemoteCommand(object):
             self.server_name = server_name
         else:
             self.server_name = cmd.machine.host
+        self.name = " ".join(cmd.formulate())
 
     def __str__(self):
-        pretty_cmd = " ".join(self.cmd.formulate())
+        pretty_cmd = self.name
         if self.cmd_args:
             pretty_cmd += " "
             pretty_cmd += " ".join([str(a) for a in self.cmd_args])
