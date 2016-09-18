@@ -277,12 +277,13 @@ def clone_devstack(helper, indent=''):
     git_source = helper.args.source
     git_branch = helper.args.branch
     verbose = bool(helper.args.verbose)
-    print("%sCloning devstack (from %s)" % (indent, git_source))
+    print("%sCloning devstack:" % (indent))
+    print("%s  Source: %s" % (indent, git_source))
+    print("%s  Branch: %s" % (indent, git_branch))
     for server in helper.servers:
         machine = helper.machines[server.name]
-        with utils.Spinner("%s  Cloning devstack"
-                           " in %s" % (indent, server.hostname),
-                           verbose=verbose):
+        with utils.Spinner("%sCloning devstack"
+                           " in %s" % (indent, server.hostname), verbose):
             rm = machine["rm"]
             rm("-rf", "devstack")
             git = machine['git']
