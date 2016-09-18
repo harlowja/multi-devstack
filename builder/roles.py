@@ -1,20 +1,20 @@
 import enum
 
 
-class Roles(enum.Enum):
+class Roles(enum.IntEnum):
     """Basic machine roles."""
 
-    #: Cap servers are what we call child cells.
-    CAP = 'cap'
-
     #: Where the database (mariadb runs).
-    DB = 'db'
-
-    #: Map servers are the parent + glance + keystone + top level things.
-    MAP = 'map'
+    DB = 1
 
     #: Rabbit.
-    RB = 'rb'
+    RB = 2
+
+    #: Map servers are the parent + glance + keystone + top level things.
+    MAP = 3
+
+    #: Cap servers are what we call child cells.
+    CAP = 4
 
     #: A kvm/qemu hypervisor + n-cpu + n-api-meta.
-    HV = 'hv'
+    HV = 5
