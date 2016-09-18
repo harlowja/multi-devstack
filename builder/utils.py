@@ -67,7 +67,7 @@ class Spinner(object):
         self._dead.set()
 
     def start(self):
-        if not self.verbose:
+        if not self.verbose and sys.stdout.isatty():
             self._dead.clear()
             self._ev.clear()
             self._t = threading.Thread(target=self._runner)
