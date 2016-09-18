@@ -53,6 +53,7 @@ DEF_TOPO = {
     Roles.HV: [],
 }
 HV_NAME_TPL = '%(user)s-hv-%(rand)s'
+MAX_WORKERS = 4
 LOG = logging.getLogger(__name__)
 
 
@@ -310,7 +311,9 @@ def install_some_packages(helper, indent=''):
                 'mariadb',
                 record_path=record_path,
                 server_name=server.hostname))
-    utils.run_and_record(remote_cmds, verbose=verbose, indent=indent)
+    utils.run_and_record(remote_cmds,
+                         verbose=verbose, indent=indent,
+                         max_workers=MAX_WORKERS)
     for server in hvs:
         machine = helper.machines[server.name]
         sudo = machine['sudo']
@@ -413,7 +416,9 @@ def run_stack(helper, indent=''):
         remote_cmds.append(
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname))
-    utils.run_and_record(remote_cmds, verbose=verbose, indent=indent)
+    utils.run_and_record(remote_cmds,
+                         verbose=verbose, indent=indent,
+                         max_workers=MAX_WORKERS)
     # Order matters here...
     maps = list(helper.iter_server_by_kind(Roles.MAP))
     caps = list(helper.iter_server_by_kind(Roles.CAP))
@@ -692,12 +697,15 @@ def create(args, cloud, tracker):
     servers = wait_servers(args, cloud, tracker,
                            bake_servers(args, cloud, tracker, topo))
     # Now turn those servers into something useful...
+    max_workers = len(servers)
+    if max_workers > MAX_WORKERS:
+        max_workers = MAX_WORKERS
     with Helper(args, cloud, tracker, servers) as helper:
         futs = []
         with utils.Spinner("Validating ssh connectivity"
-                           " using %s threads" % (len(servers)),
+                           " using %s threads" % (max_workers),
                            args.verbose):
-            with futurist.ThreadPoolExecutor(max_workers=len(servers)) as ex:
+            with futurist.ThreadPoolExecutor(max_workers=max_workers) as ex:
                 for server in servers:
                     fut = ex.submit(utils.ssh_connect,
                                     server.ip, indent="  ",
