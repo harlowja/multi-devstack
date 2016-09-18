@@ -12,7 +12,6 @@ import collections
 import hashlib
 import logging
 import os
-import shelve
 import sys
 import traceback
 
@@ -23,7 +22,6 @@ from builder import cows
 from builder import creator
 from builder import destroyer
 from builder import pprint
-from builder import utils
 
 TRACE = 5
 

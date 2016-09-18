@@ -5,7 +5,6 @@ import copy
 import logging
 import os
 import random
-import sys
 
 from datetime import datetime
 
@@ -140,7 +139,7 @@ def pos_int(val):
 
 def post_process_args(args):
     if hasattr(args, 'templates'):
-        args.templates = jinja2.Environment(
+        args.templates_fetcher = jinja2.Environment(
             undefined=jinja2.StrictUndefined,
             loader=jinja2.FileSystemLoader(args.templates)).get_template
     return args
@@ -269,29 +268,36 @@ def initial_prep_work(helper, indent=''):
 
 def clone_devstack(helper, indent=''):
     """Clears prior devstack and clones devstack + adjusts branch."""
-    print("Cloning devstack (from %s)" % (args.source))
-    for server in servers:
-        machine = ssh_machines[server.name]
-        with utils.Spinner("  Cloning devstack in %s " % (server.hostname)):
+    git_source = helper.args.source
+    git_branch = helper.args.branch
+    verbose = bool(helper.args.verbose)
+    print("%sCloning devstack (from %s)" % (indent, git_source))
+    for server in helper.servers:
+        machine = helper.machines[server.name]
+        with utils.Spinner("%s  Cloning devstack"
+                           " in %s" % (indent, server.hostname),
+                           verbose=verbose):
             rm = machine["rm"]
             rm("-rf", "devstack")
             git = machine['git']
-            git("clone", args.source)
-            git('checkout', args.branch, cwd="devstack")
+            git("clone", git_source)
+            git('checkout', git_branch, cwd="devstack")
 
 
 def install_some_packages(helper, indent=''):
     """Installs a few prerequisite packages on the various servers."""
+    scratch_dir = helper.args.scratch_dir
+    verbose = bool(helper.args.verbose)
     remote_cmds = []
-    hvs = [server for server in servers.values() if server.kind == Roles.HV]
-    maps = [server for server in servers.values() if server.kind == Roles.MAP]
-    caps = [server for server in servers.values() if server.kind == Roles.CAP]
+    hvs = list(helper.iter_server_by_kind(Roles.HV))
+    maps = list(helper.iter_server_by_kind(Roles.MAP))
+    caps = list(helper.iter_server_by_kind(Roles.CAP))
     for server in maps + caps + hvs:
-        machine = machines[server.name]
+        machine = helper.machines[server.name]
         sudo = machine['sudo']
         yum = sudo[machine['yum']]
-        record_path = os.path.join(
-            args.scratch_dir, "%s.yum_install" % (server.hostname))
+        record_path = os.path.join(scratch_dir,
+                                   "%s.yum_install" % (server.hostname))
         remote_cmds.append(
             utils.RemoteCommand(
                 yum, "-y", "install",
@@ -304,14 +310,14 @@ def install_some_packages(helper, indent=''):
                 'mariadb',
                 record_path=record_path,
                 server_name=server.hostname))
-    utils.run_and_record(remote_cmds)
+    utils.run_and_record(remote_cmds, verbose=verbose, indent=indent)
     for server in hvs:
-        machine = machines[server.name]
+        machine = helper.machines[server.name]
         sudo = machine['sudo']
         yum = sudo[machine['yum']]
         service = sudo[machine['service']]
-        record_path = os.path.join(
-            args.scratch_dir, "%s.yum_install" % (server.hostname))
+        record_path = os.path.join(scratch_dir,
+                                   "%s.yum_install" % (server.hostname))
         utils.run_and_record([
             utils.RemoteCommand(
                 yum, "-y", "install",
@@ -320,146 +326,137 @@ def install_some_packages(helper, indent=''):
                 'openvswitch',
                 record_path=record_path,
                 server_name=server.hostname)
-        ])
+        ], verbose=verbose, indent=indent)
         service('openvswitch', 'restart')
 
 
 def upload_repos(helper, indent=''):
     """Uploads all repos.d files into corresponding repos.d directory."""
-    repos_path = os.path.abspath(args.repos)
-    for server in servers.values():
+    repos_path = os.path.abspath(helper.args.repos)
+    verbose = bool(helper.args.verbose)
+    for server in helper.servers:
         file_names = [file_name
                       for file_name in os.listdir(repos_path)
                       if file_name.endswith(".repo")]
         if file_names:
-            machine = machines[server.name]
-            print("Uploading %s repos.d file/s to"
-                  " %s, please wait..." % (len(file_names), server.hostname))
-            for file_name in file_names:
-                target_path = "/etc/yum.repos.d/%s" % (file_name)
-                tpm_path = "/tmp/%s" % (file_name)
-                local_path = os.path.join(repos_path, file_name)
-                sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
-                                                                target_path))
-                sys.stdout.flush()
-                machine.upload(local_path, tpm_path)
-                sudo = machine['sudo']
-                mv = sudo[machine['mv']]
-                mv(tpm_path, target_path)
-                yum = sudo[machine['yum']]
-                yum('clean', 'all')
-                sys.stdout.write("(OK)\n")
+            machine = helper.machines[server.name]
+            with utils.Spinner("%sUploading %s repos.d file/s to"
+                               " %s" % (indent, len(file_names),
+                                        server.hostname), verbose):
+                for file_name in file_names:
+                    target_path = "/etc/yum.repos.d/%s" % (file_name)
+                    tpm_path = "/tmp/%s" % (file_name)
+                    local_path = os.path.join(repos_path, file_name)
+                    machine.upload(local_path, tpm_path)
+                    sudo = machine['sudo']
+                    mv = sudo[machine['mv']]
+                    mv(tpm_path, target_path)
+                    yum = sudo[machine['yum']]
+                    yum('clean', 'all')
 
 
 def patch_devstack(helper, indent=''):
     """Applies local devstack patches to cloned devstack."""
-    patches_path = os.path.abspath(args.patches)
-    for server in servers:
+    patches_path = os.path.abspath(helper.args.patches)
+    verbose = bool(helper.args.verbose)
+    for server in helper.servers:
         file_names = [file_name
                       for file_name in os.listdir(patches_path)
                       if file_name.endswith(".patch")]
         if file_names:
-            machine = machines[server.name]
-            print("Uploading (and applying) %s patch file/s to"
-                  " %s, please wait..." % (len(file_names), server.hostname))
-            for file_name in file_names:
-                target_path = "/home/%s/devstack/%s" % (DEF_USER, file_name)
-                local_path = os.path.join(patches_path, file_name)
-                sys.stdout.write("  Uploading & applying '%s' " % file_name)
-                sys.stdout.flush()
-                machine.upload(local_path, target_path)
-                git = machine['git']
-                git("am", file_name, cwd='devstack')
-                sys.stdout.write("(OK)\n")
+            machine = helper.machines[server.name]
+            with utils.Spinner("%sUploading (and applying) %s patch file/s to"
+                               " %s" % (indent, len(file_names),
+                                        server.hostname), verbose):
+                for file_name in file_names:
+                    target_path = "/home/%s/devstack/%s" % (DEF_USER,
+                                                            file_name)
+                    local_path = os.path.join(patches_path, file_name)
+                    machine.upload(local_path, target_path)
+                    git = machine['git']
+                    git("am", file_name, cwd='devstack')
 
 
 def upload_extras(helper, indent=''):
     """Uploads all extras.d files into corresponding devstack directory."""
-    extras_path = os.path.abspath(args.extras)
-    for server in servers:
+    extras_path = os.path.abspath(helper.args.extras)
+    verbose = bool(helper.args.verbose)
+    for server in helper.servers:
         file_names = [file_name
                       for file_name in os.listdir(extras_path)
                       if file_name.endswith(".sh")]
         if file_names:
-            machine = machines[server.name]
-            print("Uploading %s extras.d file/s to"
-                  " %s, please wait..." % (len(file_names), server.hostname))
-            for file_name in file_names:
-                target_path = "/home/%s/devstack/extras.d/%s" % (DEF_USER,
-                                                                 file_name)
-                local_path = os.path.join(extras_path, file_name)
-                sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
-                                                                target_path))
-                sys.stdout.flush()
-                machine.upload(local_path, target_path)
-                sys.stdout.write("(OK)\n")
+            machine = helper.machines[server.name]
+            with utils.Spinner("%sUploading %s extras.d file/s to"
+                               " %s" % (indent, len(file_names),
+                                        server.hostname), verbose):
+                for file_name in file_names:
+                    target_path = "/home/%s/devstack/extras.d/%s" % (DEF_USER,
+                                                                     file_name)
+                    local_path = os.path.join(extras_path, file_name)
+                    machine.upload(local_path, target_path)
 
 
 def run_stack(helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
     stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
+    scratch_dir = helper.args.scratch_dir
+    verbose = bool(helper.args.verbose)
     # We can do these in parallel...
-    rbs = [server for server in servers if server.kind == Roles.RB]
-    dbs = [server for server in servers if server.kind == Roles.DB]
+    rbs = list(helper.iter_server_by_kind(Roles.RB))
+    dbs = list(helper.iter_server_by_kind(Roles.DB))
     remote_cmds = []
     for server in rbs + dbs:
-        machine = machines[server.name]
+        machine = helper.machines[server.name]
         cmd = machine[stack_sh]
-        record_path = os.path.join(args.scratch_dir,
-                                   "%s.stack" % server.hostname)
+        record_path = os.path.join(scratch_dir, "%s.stack" % server.hostname)
         remote_cmds.append(
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname))
-    utils.run_and_record(remote_cmds)
+    utils.run_and_record(remote_cmds, verbose=verbose, indent=indent)
     # Order matters here...
-    hvs = [server for server in servers.values() if server.kind == Roles.HV]
-    maps = [server for server in servers.values() if server.kind == Roles.MAP]
-    caps = [server for server in servers.values() if server.kind == Roles.CAP]
+    maps = list(helper.iter_server_by_kind(Roles.MAP))
+    caps = list(helper.iter_server_by_kind(Roles.CAP))
+    hvs = list(helper.iter_server_by_kind(Roles.HV))
     for server in maps + caps + hvs:
-        machine = machines[server.name]
+        machine = helper.machines[server.name]
         cmd = machine[stack_sh]
-        record_path = os.path.join(args.scratch_dir,
-                                   "%s.stack" % server.hostname)
+        record_path = os.path.join(scratch_dir, "%s.stack" % server.hostname)
         utils.run_and_record([
             utils.RemoteCommand(cmd, record_path=record_path,
                                 server_name=server.hostname)
-        ])
+        ], verbose=verbose, indent=indent)
 
 
 def create_local_files(helper, indent=''):
     """Creates and uploads all local.conf files for devstack."""
-    if settings:
-        params = settings.copy()
-    else:
-        params = {}
+    template_fetcher = helper.args.templates_fetcher
+    scratch_dir = helper.args.scratch_dir
+    verbose = bool(helper.args.verbose)
+    params = helper.settings.copy()
     # This needs to be done so that servers that will not have rabbit
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
-    rbs = [server for server in servers.values() if server.kind == Roles.RB]
-    dbs = [server for server in servers.values() if server.kind == Roles.DB]
+    rbs = list(helper.iter_server_by_kind(Roles.RB))
+    dbs = list(helper.iter_server_by_kind(Roles.DB))
     params.update({
         'DATABASE_HOST': dbs[0].hostname,
         'RABBIT_HOST': rbs[0].hostname,
-        'RELEASE': args.branch,
     })
     target_path = "/home/%s/devstack/local.conf" % DEF_USER
-    for server in servers.values():
-        machine = machine[server.name]
-        print("Uploading local.conf to"
-              " %s, please wait..." % (server.hostname))
-        local_path = os.path.join(args.scratch_dir,
-                                  "local.%s.conf" % server.hostname)
-        tpl = args.templates("local.%s.tpl" % kind)
-        tpl_contents = tpl.render(**params)
-        if not tpl_contents.endwith("\n"):
-            tpl_contents += "\n"
-        with utils.safe_open(local_path, 'wb') as o_fh:
-            o_fh.write(tpl_contents)
-        sys.stdout.write("  Uploading '%s' => '%s' " % (local_path,
-                                                        target_path))
-        sys.stdout.flush()
-        machine.upload(local_path, target_path)
-        sys.stdout.write("(OK)\n")
+    for server in helper.servers:
+        machine = helper.machines[server.name]
+        with utils.Spinner("%sUploading local.conf to"
+                           " %s" % (indent, server.hostname), verbose):
+            local_path = os.path.join(scratch_dir,
+                                      "local.%s.conf" % server.hostname)
+            tpl = template_fetcher("local.%s.tpl" % server.kind.value)
+            tpl_contents = tpl.render(**params)
+            if not tpl_contents.endwith("\n"):
+                tpl_contents += "\n"
+            with utils.safe_open(local_path, 'wb') as o_fh:
+                o_fh.write(tpl_contents)
+            machine.upload(local_path, target_path)
 
 
 def bind_hostnames(helper, indent=''):
@@ -480,7 +477,7 @@ def spawn_topo(args, cloud, tracker,
         'USER_PW': DEF_PW,
         'CREATOR': cloud.auth['username'],
     }
-    ud_tpl = args.templates("ud.tpl")
+    ud_tpl = args.template_fetcher("ud.tpl")
     ud = ud_tpl.render(**ud_params)
     topo = tracker.get("topo", {})
     pretty_topo = {}
