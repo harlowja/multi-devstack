@@ -4,6 +4,7 @@ import argparse
 import copy
 import itertools
 import logging
+import multiprocessing
 import os
 import random
 
@@ -211,11 +212,15 @@ def bind_subparser(subparsers):
                                     " to spin up (default=%(default)s)",
                                default=2, type=pos_int,
                                metavar='NUMBER')
+    try:
+        max_workers = multiprocessing.cpu_count() + 1
+    except NotImplementedError:
+        max_workers = 2
     parser_create.add_argument("--max-workers",
                                help="maximum number of thread"
                                     " workers to spin"
                                     " up (default=%(default)s)",
-                               default=4, type=pos_int,
+                               default=max_workers, type=pos_int,
                                metavar='NUMBER')
     parser_create.add_argument("-a", "--availability-zone",
                                help="explicit availability"
