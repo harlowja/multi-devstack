@@ -98,15 +98,20 @@ class Helper(object):
             print("%s  Details: '%s'" % (indent, func_details))
         store_name = ":".join([func.__module__, func.__name__])
         if store_name not in self.tracker or always_run:
+            t_start = utils.now()
             result = func(self, indent=indent + "    ")
-            self.tracker[store_name] = (result, datetime.utcnow())
+            t_end = utils.now()
+            t_elapsed = t_end - t_start
+            self.tracker[store_name] = (result, datetime.utcnow(), t_elapsed)
             self.tracker.sync()
-            print('%sStep %s has finished.' % (indent, step_num))
+            print('%sStep %s has finished in %0.2f seconds' % (indent,
+                                                               step_num,
+                                                               t_elapsed))
         else:
-            result, finished_on = self.tracker[store_name]
+            result, finished_on, t_elapsed = self.tracker[store_name]
             print('%sStep %s was previously'
-                  ' finished on %s.' % (indent, step_num,
-                                        finished_on.isoformat()))
+                  ' finished on %s' % (indent, step_num,
+                                       finished_on.isoformat()))
         return result
 
     def iter_server_by_kind(self, kind):
@@ -313,7 +318,7 @@ def install_some_packages(helper, indent=''):
                 server_name=server.hostname))
     utils.run_and_record(remote_cmds,
                          verbose=verbose, indent=indent,
-                         max_workers=MAX_WORKERS)
+                         max_workers=min(len(remote_cmds), MAX_WORKERS))
     for server in hvs:
         machine = helper.machines[server.name]
         sudo = machine['sudo']
@@ -418,7 +423,7 @@ def run_stack(helper, indent=''):
                                 server_name=server.hostname))
     utils.run_and_record(remote_cmds,
                          verbose=verbose, indent=indent,
-                         max_workers=MAX_WORKERS)
+                         max_workers=min(MAX_WORKERS, len(remote_cmds)))
     # Order matters here...
     maps = list(helper.iter_server_by_kind(Roles.MAP))
     caps = list(helper.iter_server_by_kind(Roles.CAP))
@@ -508,6 +513,7 @@ def spawn_topo(args, cloud, tracker,
                 tracker.sync()
             else:
                 instance = topo[name]
+            # This is just for visuals...
             pretty_topo[name] = {
                 'name': instance.name,
                 'flavor': instance.flavor.name,
@@ -532,7 +538,9 @@ def wait_servers(args, cloud, tracker, servers):
     for i, server in enumerate(servers):
         with utils.Spinner("  Waiting for %s" % server.name, args.verbose):
             if server.status != 'ACTIVE':
-                server = cloud.wait_for_server(server, auto_ip=False)
+                tmp_server = cloud.wait_for_server(server, auto_ip=False)
+                tmp_server.kind = server.kind
+                server = tmp_server
         server_ip = get_server_ip(server)
         if not server_ip:
             raise RuntimeError("Instance %s spawned but no ip"
@@ -697,9 +705,7 @@ def create(args, cloud, tracker):
     servers = wait_servers(args, cloud, tracker,
                            bake_servers(args, cloud, tracker, topo))
     # Now turn those servers into something useful...
-    max_workers = len(servers)
-    if max_workers > MAX_WORKERS:
-        max_workers = MAX_WORKERS
+    max_workers = min(MAX_WORKERS, len(servers))
     with Helper(args, cloud, tracker, servers) as helper:
         futs = []
         with utils.Spinner("Validating ssh connectivity"
