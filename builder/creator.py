@@ -689,10 +689,6 @@ def transform(helper):
 
 def create(args, cloud, tracker):
     """Creates/continues building a new environment."""
-    if tracker.has_finished(run_stack):
-        raise RuntimeError("We currently do not support re-stacking"
-                           " a cloud, so please `destroy` the current one"
-                           " before running")
     with utils.Spinner("Validating arguments against cloud", args.verbose):
         # Due to some funkiness with our openstack we have to list out
         # the az's and pick one, typically favoring ones with 'cor' in there
@@ -745,6 +741,10 @@ def create(args, cloud, tracker):
     # Now turn those servers into something useful...
     max_workers = min(MAX_WORKERS, len(servers))
     with Helper(args, cloud, tracker, servers) as helper:
+        if helper.has_finished(run_stack):
+            raise RuntimeError("We currently do not support re-stacking"
+                               " a cloud, so please `destroy` the current one"
+                               " before running")
         futs = []
         with utils.Spinner("Validating ssh connectivity"
                            " using %s threads" % (max_workers),
