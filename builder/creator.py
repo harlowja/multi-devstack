@@ -108,7 +108,7 @@ class Helper(object):
         else:
             if self.ongoing:
                 raise ValueError("Can not start a step with"
-                                 " non-zero active step underway")
+                                 " non-zero active steps underway")
             step.base_name = ":".join([func.__module__, func.__name__])
             step.real_name = step.base_name
             step.is_substep = False
@@ -121,7 +121,6 @@ class Helper(object):
         try:
             if step.details:
                 print("%s  Details: '%s'" % (indent, step.details))
-            print("%s  Stored under: '%s'" % (indent, step.real_name))
             if step.real_name not in self.tracker or always_run:
                 t_start = utils.now()
                 result = func(self, indent=indent + "    ")
