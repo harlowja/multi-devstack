@@ -453,31 +453,20 @@ def run_stack(helper, indent=''):
     scratch_dir = helper.args.scratch_dir
     verbose = bool(helper.args.verbose)
     stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
-
-    def make_runner(server):
-        machine = helper.machines[server.name]
-        record_path = os.path.join(scratch_dir, "%s.stack" % server.hostname)
-        cmd = machine[stack_sh]
-
-        def run_one_stack(helper, indent=''):
-            utils.run_and_record([
-                utils.RemoteCommand(cmd, record_path=record_path,
-                                    server_name=server.hostname)
-            ], verbose=verbose, indent=indent)
-
-        run_one_stack.__doc__ = "Activates stack.sh on %s" % server.name
-        return run_one_stack
-
-    # Order matters here...
-    for kind in [Roles.RB, Roles.DB, Roles.MAP, Roles.CAP, Roles.HV]:
-        for server in helper.iter_server_by_kind(kind):
-            substep = "%s@%s" % (kind.name, server.name)
-            store = munch.Munch({
-                'kind': kind,
-                'server': server,
-            })
-            helper.run_and_track(make_runner(server), indent=indent + "  ",
-                                 substep=substep, store=store)
+    for group in [[Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV]]:
+        run_cmds = []
+        for kind in group:
+            for server in helper.iter_server_by_kind(kind):
+                machine = helper.machines[server.name]
+                record_path = os.path.join(scratch_dir,
+                                           "%s.stack" % server.hostname)
+                run_cmds.append(
+                    utils.RemoteCommand(
+                        machine[stack_sh], record_path=record_path,
+                        server_name=server.hostname))
+        if run_cmds:
+            helper.run_cmds_and_track(run_cmds, indent=indent + "  ",
+                                      verbose=verbose)
 
 
 def create_local_files(helper, indent=''):
