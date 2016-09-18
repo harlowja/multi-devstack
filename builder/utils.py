@@ -224,17 +224,6 @@ def generate_secret(max_len=10):
     return "".join(random.choice(PASS_CHARS) for _i in xrange(0, max_len))
 
 
-def read_file(path, mode='rb', default=''):
-    try:
-        with open(path, mode) as fh:
-            return fh.read()
-    except IOError as e:
-        if e.errno == errno.ENOENT:
-            return default
-        else:
-            raise
-
-
 def safe_make_dir(a_dir):
     try:
         os.makedirs(a_dir)
