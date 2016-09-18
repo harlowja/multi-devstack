@@ -114,7 +114,7 @@ class Helper(object):
                 to_run_servers.append(server)
 
         if to_run_cmds:
-            max_workers = min(self.args.max_workers, len(to_run_cmds))
+            max_workers = min(self._args.max_workers, len(to_run_cmds))
             utils.run_and_record(to_run_cmds, indent=indent,
                                  max_workers=max_workers,
                                  on_done=on_done, verbose=verbose)
@@ -488,7 +488,8 @@ def create_local_files(args, helper, indent=''):
                            " %s" % (indent, server.hostname), args.verbose):
             local_path = os.path.join(args.scratch_dir,
                                       "local.%s.conf" % server.hostname)
-            tpl = template_fetcher("local.%s.tpl" % server.kind.value)
+            tpl = template_fetcher(
+                "local.%s.tpl" % server.kind.name.lower())
             tpl_contents = tpl.render(**params)
             if not tpl_contents.endswith("\n"):
                 tpl_contents += "\n"
