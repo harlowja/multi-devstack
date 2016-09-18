@@ -465,7 +465,7 @@ def run_stack(args, helper, indent=''):
     def on_prior(server, remote_cmd, last):
         if last.started and not last.finished:
             print("%sWARNING: Server %s already started running `%s` this"
-                  " may not end well as stack.sh not"
+                  " may not end well as stack.sh is not"
                   " idempotent..." % (indent, server.name, stack_sh))
             return True
         else:
