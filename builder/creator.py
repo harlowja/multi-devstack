@@ -60,6 +60,9 @@ LOG = logging.getLogger(__name__)
 class Helper(object):
     """Conglomerate of things for our to-be/in-progress cloud."""
 
+    CMD_PREFIX = '$c$'
+    FUNC_PREFIX = '$f$'
+
     def __init__(self, args, cloud, tracker, servers):
         self.args = args
         self.servers = tuple(servers)
@@ -68,7 +71,6 @@ class Helper(object):
         self.exit_stack = contextlib2.ExitStack()
         self.cloud = cloud
         self.steps_ran = 0
-        self.ongoing = []
         self._settings = None
 
     @property
@@ -89,56 +91,66 @@ class Helper(object):
             self._settings = settings
             return self._settings
 
-    def run_and_track(self, func, always_run=False,
-                      indent='', substep=None, store=None):
-        step = munch.Munch({'store': store})
+    def run_cmds_and_track(self, remote_cmds,
+                           indent='', on_prior=None,
+                           verbose=True):
+        def on_done(remote_cmd, index):
+            cmd_name = self.CMD_PREFIX
+            cmd_name += str(remote_cmd)
+            self.tracker[cmd_name] = True
+            self.tracker.sync()
+        to_run_cmds = []
+        for index, remote_cmd in enumerate(remote_cmds):
+            cmd_name = self.CMD_PREFIX
+            cmd_name += str(remote_cmd)
+            if cmd_name in self.tracker:
+                if on_prior is not None:
+                    should_run = on_prior(remote_cmd, index)
+                else:
+                    should_run = False
+            else:
+                should_run = True
+            if should_run:
+                to_run_cmds.append(remote_cmd)
+        if to_run_cmds:
+            max_workers = min(MAX_WORKERS, len(to_run_cmds))
+            utils.run_and_record(to_run_cmds, indent=indent,
+                                 max_workers=max_workers,
+                                 on_done=on_done, verbose=verbose)
+
+    def run_func_and_track(self, func, indent='', on_prior=None):
+        step = munch.Munch()
         step.details = getattr(func, '__doc__', '')
-        if substep is not None:
-            if not self.ongoing:
-                raise ValueError("Can not start a substep with"
-                                 " zero active steps underway")
-            step.base_name = str(substep)
-            step.real_name = "/".join(s.base_name for s in self.ongoing)
-            step.real_name += "." + step.base_name
-            step.is_substep = True
-        else:
-            if self.ongoing:
-                raise ValueError("Can not start a step with"
-                                 " non-zero active steps underway")
-            step.base_name = ":".join([func.__module__, func.__name__])
-            step.real_name = step.base_name
-            step.is_substep = False
-            self.steps_ran += 1
-        if not step.is_substep:
-            print("%sActivating step '%s'" % (indent, step.real_name))
-        else:
-            print("%sActivating substep '%s'" % (indent, step.real_name))
-        self.ongoing.append(step)
+        step.name = self.FUNC_PREFIX
+        step.name += ":".join([func.__module__, func.__name__])
+        self.steps_ran += 1
+        print("%sActivating step '%s'" % (indent, step.name))
         try:
             if step.details:
                 print("%s  Details: '%s'" % (indent, step.details))
-            if step.real_name not in self.tracker or always_run:
-                t_start = utils.now()
+            if step.name in self.tracker:
+                if on_prior is not None:
+                    should_run = on_prior()
+                else:
+                    should_run = False
+            else:
+                should_run = True
+            if should_run:
+                start = utils.now()
                 result = func(self, indent=indent + "    ")
-                t_end = utils.now()
+                end = utils.now()
                 step.result = result
                 step.finished_on = datetime.utcnow()
-                step.elapsed = t_end - t_start
-                self.tracker[step.real_name] = step
+                step.elapsed = end - start
+                self.tracker[step.name] = step
                 self.tracker.sync()
                 print("%sStep '%s' has finished in"
-                      " %0.2f seconds" % (indent, step.real_name,
-                                          step.elapsed))
+                      " %0.2f seconds" % (indent, step.name, step.elapsed))
             else:
-                step = self.tracker[step.real_name]
-                if not step.is_substep:
-                    print("%sStep '%s' was previously finished"
-                          " on %s" % (indent, step.real_name,
-                                      step.finished_on.isoformat()))
-                else:
-                    print("%sSubstep '%s' was previously finished"
-                          " on %s" % (indent, step.real_name,
-                                      step.finished_on.isoformat()))
+                step = self.tracker[step.name]
+                print("%sStep '%s' was previously finished"
+                      " on %s" % (indent, step.name,
+                                  step.finished_on.isoformat()))
                 result = step.result
         finally:
             self.ongoing.pop()
@@ -671,15 +683,15 @@ def bake_servers(args, cloud, tracker, topo):
 
 def transform(helper):
     """Turn (mostly) raw servers into useful things."""
-    helper.run_and_track(bind_hostnames, always_run=True)
-    helper.run_and_track(initial_prep_work)
-    helper.run_and_track(upload_repos)
-    helper.run_and_track(install_some_packages)
-    helper.run_and_track(clone_devstack)
-    helper.run_and_track(patch_devstack)
-    helper.run_and_track(upload_extras)
-    helper.run_and_track(create_local_files)
-    helper.run_and_track(run_stack)
+    helper.run_func_and_track(bind_hostnames, on_prior=lambda: True)
+    helper.run_func_and_track(initial_prep_work)
+    helper.run_func_and_track(upload_repos)
+    helper.run_func_and_track(install_some_packages)
+    helper.run_func_and_track(clone_devstack)
+    helper.run_func_and_track(patch_devstack)
+    helper.run_func_and_track(upload_extras)
+    helper.run_func_and_track(create_local_files)
+    helper.run_func_and_track(run_stack)
 
 
 def create(args, cloud, tracker):

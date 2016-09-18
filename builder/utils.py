@@ -112,7 +112,13 @@ class RemoteCommand(object):
             self.server_name = server_name
         else:
             self.server_name = cmd.machine.host
-        self.on_done = kwargs.get('on_done')
+
+    def __str__(self):
+        pretty_cmd = " ".join(self.cmd.formulate())
+        if self.cmd_args:
+            pretty_cmd += " "
+            pretty_cmd += " ".join([str(a) for a in self.cmd_args])
+        return "`%s` running on server '%s'" % (pretty_cmd, self.server_name)
 
 
 def safe_open(path, mode):
@@ -137,11 +143,13 @@ def trim_it(block, max_len, reverse=False):
 
 def run_and_record(remote_cmds, indent="",
                    err_chop_len=1024, max_workers=None,
-                   verbose=True):
-    def cmd_runner(remote_cmd, stdout_fh, stderr_fh):
+                   verbose=True, on_done=None,
+                   on_start=None):
+    def cmd_runner(remote_cmd, index, stdout_fh, stderr_fh):
+        if on_start is not None:
+            on_start(remote_cmd, index)
         cmd = remote_cmd.cmd
         cmd_args = remote_cmd.cmd_args
-        t_start = now()
         for stdout, stderr in cmd.popen(cmd_args).iter_lines():
             if stdout:
                 print(stdout, file=stdout_fh)
@@ -149,20 +157,13 @@ def run_and_record(remote_cmds, indent="",
             if stderr:
                 print(stderr, file=stderr_fh)
                 stderr_fh.flush()
-        t_end = now()
-        if remote_cmd.on_done is not None:
-            remote_cmd.on_done(t_end - t_start)
+        if on_done is not None:
+            on_done(remote_cmd, index)
     to_run = []
     ran = []
     with contextlib2.ExitStack() as e_stack:
-        for remote_cmd in remote_cmds:
-            cmd = remote_cmd.cmd
-            pretty_cmd = " ".join(cmd.formulate())
-            if remote_cmd.cmd_args:
-                pretty_cmd += " "
-                pretty_cmd += " ".join([str(a) for a in remote_cmd.cmd_args])
-            print("%sRunning '%s' on server '%s'" % (indent, pretty_cmd,
-                                                     remote_cmd.server_name))
+        for index, remote_cmd in enumerate(remote_cmds):
+            print("%sRunning %s" % (indent, remote_cmd))
             stderr_path = remote_cmd.stderr_record_path
             stderr_fh = safe_open(stderr_path, 'a+b')
             e_stack.callback(stderr_fh.close)
@@ -175,7 +176,7 @@ def run_and_record(remote_cmds, indent="",
                       " run: `tail -f %s`" % (indent, kind, filename))
             to_run.append((remote_cmd,
                            functools.partial(cmd_runner, remote_cmd,
-                                             stdout_fh, stderr_fh)))
+                                             index, stdout_fh, stderr_fh)))
         if max_workers is None:
             max_workers = len(to_run)
         with Spinner('%sPlease wait' % indent, verbose):
@@ -188,9 +189,7 @@ def run_and_record(remote_cmds, indent="",
         fut_exc = fut.exception()
         if fut_exc is not None:
             fails += 1
-            cmd = remote_cmd.cmd
-            fail_buf.write("Running remote cmd on"
-                           " '%s' failed:\n" % (remote_cmd.server_name))
+            fail_buf.write("Running %s failed:\n" % (remote_cmd))
             if isinstance(fut_exc, plumbum.ProcessExecutionError):
                 fail_buf.write("  Due to process execution error:\n")
                 fail_buf.write("    Exit code: %s\n" % (fut_exc.retcode))
