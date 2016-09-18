@@ -13,6 +13,10 @@ def bind_subparser(subparsers):
                                 default=False,
                                 help=("do not wait for servers to actually"
                                       " be fully deleted"))
+    parser_destroy.add_argument("-c", "--clear", action='store_true',
+                                default=False,
+                                help=("completly clear state file on"
+                                      " completion"))
     parser_destroy.set_defaults(func=destroy)
     return parser_destroy
 
@@ -39,6 +43,9 @@ def destroy(args, cloud, tracker):
             # being accurate, so destroy them...
             tracker.pop('funcs', None)
             tracker.sync()
-    # Clear off the functions that were also invoked...
-    tracker.pop('funcs', None)
+    if args.clear:
+        tracker.clear()
+    else:
+        # Always clear off the functions that were also invoked...
+        tracker.pop('funcs', None)
     tracker.sync()
