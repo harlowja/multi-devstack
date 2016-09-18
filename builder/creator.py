@@ -106,7 +106,7 @@ class Helper(object):
             step.real_name += "." + step.base_name
             step.is_substep = True
         else:
-            if self._ongoing_steps:
+            if self.ongoing:
                 raise ValueError("Can not start a step with"
                                  " non-zero active step underway")
             step.base_name = ":".join([func.__module__, func.__name__])
