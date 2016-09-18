@@ -1,10 +1,5 @@
 #!/usr/bin/env python
 
-"""
-A wonderful magically tool to build a development
-environment for you (out of virtual machines).
-"""
-
 from __future__ import print_function
 
 import argparse
@@ -30,7 +25,7 @@ TRACE = 5
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser()
     parser.add_argument("--state",
                         help="file to read/write action state"
                              " information into/from (default=%(default)s)",
