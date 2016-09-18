@@ -92,13 +92,13 @@ class Helper(object):
         step_num = self.steps_ran + 1
         print("%sActivating step %s." % (indent, step_num))
         self.steps_ran += 1
-        print("%sName: '%s'" % (indent, func.__name__))
+        print("%s  Name: '%s'" % (indent, func.__name__))
         func_details = getattr(func, '__doc__', '')
         if func_details:
-            print("%sDetails: '%s'" % (indent, func_details))
+            print("%s  Details: '%s'" % (indent, func_details))
         store_name = ":".join([func.__module__, func.__name__])
         if store_name not in self.tracker or always_run:
-            result = func(self, indent=indent + "  ")
+            result = func(self, indent=indent + "    ")
             self.tracker[store_name] = (result, datetime.utcnow())
             self.tracker.sync()
             print('%sStep %s has finished.' % (indent, step_num))

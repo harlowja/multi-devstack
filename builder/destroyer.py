@@ -21,9 +21,7 @@ def destroy(args, cloud, tracker):
     """Destroy a previously (partially or fully) built environment."""
     servers = tracker.get('servers', [])
     maybe_servers = tracker.get('maybe_servers', [])
-    if not any([servers, maybe_servers]):
-        print("Nothing to destroy.")
-    else:
+    if any([servers, maybe_servers]):
         destroyed = set()
         while servers:
             server = servers.pop()
