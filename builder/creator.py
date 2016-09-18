@@ -139,7 +139,7 @@ def pos_int(val):
 
 def post_process_args(args):
     if hasattr(args, 'templates'):
-        args.templates_fetcher = jinja2.Environment(
+        args.template_fetcher = jinja2.Environment(
             undefined=jinja2.StrictUndefined,
             loader=jinja2.FileSystemLoader(args.templates)).get_template
     return args
