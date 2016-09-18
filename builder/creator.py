@@ -52,6 +52,7 @@ DEF_TOPO = {
     Roles.HV: [],
 }
 HV_NAME_TPL = '%(user)s-hv-%(rand)s'
+STACK_SH = '/home/%s/devstack/stack.sh' % DEF_USER
 LOG = logging.getLogger(__name__)
 
 
@@ -439,7 +440,7 @@ def upload_extras(args, helper, indent=''):
 
 def run_stack(args, helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
-    stack_sh = '/home/%s/devstack/stack.sh' % DEF_USER
+    stack_sh = STACK_SH
 
     def on_prior(server, remote_cmd):
         print("%sServer %s already %s, this may not end well as"
