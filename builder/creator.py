@@ -92,19 +92,29 @@ class Helper(object):
         to_run_cmds = []
         to_run_servers = []
 
+        def on_start(remote_cmd, index):
+            server = to_run_servers[index]
+            record = self.tracker[server.name]
+            record.cmds[remote_cmd.name] = munch.Munch(started=True,
+                                                       finished=False)
+            self.tracker[server.name] = record
+            self.tracker.sync()
+
         def on_done(remote_cmd, index):
             server = to_run_servers[index]
             record = self.tracker[server.name]
-            record.cmds.add(remote_cmd.name)
+            last = record.cmds[remote_cmd.name]
+            last.finished = True
             self.tracker[server.name] = record
             self.tracker.sync()
 
         for server, remote_cmd in itertools.izip(servers, remote_cmds):
             record = self.tracker[server.name]
             cmd_name = remote_cmd.name
-            if cmd_name in record.cmds:
+            last = record.cmds.get(cmd_name)
+            if last is not None:
                 if on_prior is not None:
-                    should_run = on_prior(server, remote_cmd)
+                    should_run = on_prior(server, remote_cmd, last)
                 else:
                     should_run = False
             else:
@@ -117,7 +127,8 @@ class Helper(object):
             max_workers = min(self._args.max_workers, len(to_run_cmds))
             utils.run_and_record(to_run_cmds, indent=indent,
                                  max_workers=max_workers,
-                                 on_done=on_done, verbose=verbose)
+                                 on_done=on_done, verbose=verbose,
+                                 on_start=on_start)
 
     def run_func_and_track(self, func, indent='', on_prior=None):
         func_details = getattr(func, '__doc__', '')
@@ -442,11 +453,14 @@ def run_stack(args, helper, indent=''):
     """Activates stack.sh on the various servers (in the right order)."""
     stack_sh = STACK_SH
 
-    def on_prior(server, remote_cmd):
-        print("%sServer %s already %s, this may not end well as"
-              " stack.sh is not idempotent..." % (indent, server.name,
-                                                  stack_sh))
-        return False
+    def on_prior(server, remote_cmd, last):
+        if last.started:
+            print("%sServer %s already %s, this may not end well as"
+                  " stack.sh is not idempotent..." % (indent, server.name,
+                                                      stack_sh))
+            return True
+        else:
+            return False
 
     for group in [[Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV]]:
         run_cmds = []
@@ -662,7 +676,7 @@ def bake_servers(args, cloud, tracker, topo):
     else:
         print("  Spawning none.")
     for server in servers:
-        record = munch.Munch({'cmds': set()})
+        record = munch.Munch({'cmds': {}})
         if server.name in new_names:
             tracker[server.name] = record
         else:
