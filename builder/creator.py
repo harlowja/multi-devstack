@@ -639,15 +639,22 @@ def reconcile_servers(args, cloud, tracker,
         return False
     if not new_servers:
         return False
-    print("Performing reconciliation,"
-          " destroying %s existing servers." % (len(existing_servers)))
+    kill_servers = []
     for server in existing_servers:
-        with utils.Spinner("  Destroying"
-                           " server %s" % server.name, args.verbose):
-            cloud.delete_server(server.name, wait=True)
-        tracker.pop(server.name, None)
-        tracker.sync()
-    return True
+        if server.name in tracker:
+            kill_servers.append(server)
+    if kill_servers:
+        print("Performing reconciliation,"
+              " destroying %s existing servers." % (len(kill_servers)))
+        for server in kill_servers:
+            with utils.Spinner("  Destroying"
+                               " server %s" % server.name, args.verbose):
+                cloud.delete_server(server.name, wait=True)
+            tracker.pop(server.name)
+            tracker.sync()
+        return True
+    else:
+        return False
 
 
 def bake_servers(args, cloud, tracker, topo):
@@ -698,13 +705,6 @@ def bake_servers(args, cloud, tracker, topo):
                 new_servers.append(server)
     else:
         print("  Spawning none.")
-    for server in new_servers + existing_servers:
-        record = munch.Munch({'cmds': {}})
-        if server.name in new_names:
-            tracker[server.name] = record
-        else:
-            record = tracker.setdefault(server.name, record)
-        tracker.sync()
     return existing_servers, new_servers
 
 
@@ -782,6 +782,11 @@ def create(args, cloud, tracker):
                                           existing_servers, new_servers)
     servers = list(existing_servers)
     servers.extend(new_servers)
+    # Add records for all servers (new or old).
+    for server in servers:
+        record = munch.Munch({'cmds': {}})
+        record = tracker.setdefault(server.name, record)
+        tracker.sync()
     wait_servers(args, cloud, tracker, servers)
     # Now turn those servers into something useful...
     max_workers = min(args.max_workers, len(servers))
