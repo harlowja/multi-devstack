@@ -677,9 +677,8 @@ def create(args, cloud, tracker):
         azs = [az.zoneName
                for az in nc.availability_zones.list(detailed=False)]
         if not azs:
-            raise RuntimeError(
-                    "Can not create instances in a cloud with no"
-                    " availability zones")
+            raise RuntimeError("Can not create instances in a cloud with no"
+                               " availability zones")
         if args.key_name:
             k = cloud.get_keypair(args.key_name)
             if not k:
