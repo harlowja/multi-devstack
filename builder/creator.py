@@ -68,8 +68,7 @@ class Helper(object):
         self.exit_stack = contextlib2.ExitStack()
         self.cloud = cloud
         self.steps_ran = 0
-        self._ongoing_steps = []
-        self._ongoing_names = []
+        self.ongoing = []
         self._settings = None
 
     @property
@@ -91,59 +90,63 @@ class Helper(object):
             return self._settings
 
     def has_finished(self, func):
-        store_name = ":".join([func.__module__, func.__name__])
-        return store_name in self.tracker
+        real_name = ":".join([func.__module__, func.__name__])
+        return real_name in self.tracker
 
-    def run_and_track(self, func, always_run=False, indent='', substep=None):
+    def run_and_track(self, func, always_run=False,
+                      indent='', substep=None, store=None):
+        step = munch.Munch({'store': store})
+        step.details = getattr(func, '__doc__', '')
         if substep is not None:
-            if not self._ongoing_steps:
+            if not self.ongoing:
                 raise ValueError("Can not start a substep with"
                                  " zero active steps underway")
-            base_step = ".".join(self._ongoing_steps)
-            step = "%s.%s" % (base_step, substep)
-            self._ongoing_steps.append(substep)
-            print("%sActivating substep %s." % (indent, step))
+            step.base_name = str(substep)
+            step.real_name = ".".join(s.base_name for s in self.ongoing)
+            step.real_name += "." + step.base_name
+            step.is_substep = True
         else:
             if self._ongoing_steps:
                 raise ValueError("Can not start a step with"
                                  " non-zero active step underway")
-            step = str(self.steps_ran + 1)
-            print("%sActivating step %s." % (indent, step))
-            self._ongoing_steps.append(step)
+            step.base_name = ":".join([func.__module__, func.__name__])
+            step.real_name = step.base_name
+            step.is_substep = False
             self.steps_ran += 1
+        if not step.is_substep:
+            print("%sActivating step '%s'" % (indent, step.real_name))
+        else:
+            print("%sActivating substep '%s'" % (indent, step.real_name))
+        self.ongoing.append(step)
         try:
-            print("%s  Name: '%s'" % (indent, func.__name__))
-            func_details = getattr(func, '__doc__', '')
-            if func_details:
-                print("%s  Details: '%s'" % (indent, func_details))
-            if substep is not None:
-                base_store_name = "/".join(self._ongoing_names)
-                store_name = base_store_name + "/" + substep
-                self._ongoing_names.append(substep)
+            if step.details:
+                print("%s  Details: '%s'" % (indent, step.details))
+            print("%s  Stored under: '%s'" % (indent, step.real_name))
+            if step.real_name not in self.tracker or always_run:
+                t_start = utils.now()
+                result = func(self, indent=indent + "    ")
+                t_end = utils.now()
+                step.result = result
+                step.finished_on = datetime.utcnow()
+                step.elapsed = t_end - t_start
+                self.tracker[step.real_name] = step
+                self.tracker.sync()
+                print("%sStep '%s' has finished in"
+                      " %0.2f seconds" % (indent, step.real_name,
+                                          step.elapsed))
             else:
-                store_name = ":".join([func.__module__, func.__name__])
-                self._ongoing_names.append(store_name)
-            print("%s  Stored under: '%s'" % (indent, store_name))
-            try:
-                if store_name not in self.tracker or always_run:
-                    t_start = utils.now()
-                    result = func(self, indent=indent + "    ")
-                    t_end = utils.now()
-                    t_elapsed = t_end - t_start
-                    self.tracker[store_name] = (result,
-                                                datetime.utcnow(), t_elapsed)
-                    self.tracker.sync()
-                    print('%sStep %s has finished in'
-                          ' %0.2f seconds' % (indent, step, t_elapsed))
+                step = self.tracker[step.real_name]
+                if not step.is_substep:
+                    print("%sStep '%s' was previously finished"
+                          " on %s" % (indent, step.real_name,
+                                      step.finished_on.isoformat()))
                 else:
-                    result, finished_on, t_elapsed = self.tracker[store_name]
-                    print('%sStep %s was previously'
-                          ' finished on %s' % (indent, step,
-                                               finished_on.isoformat()))
-            finally:
-                self._ongoing_names.pop()
+                    print("%sSubstep '%s' was previously finished"
+                          " on %s" % (indent, step.real_name,
+                                      step.finished_on.isoformat()))
+                result = step.result
         finally:
-            self._ongoing_steps.pop()
+            self.ongoing.pop()
         return result
 
     def iter_server_by_kind(self, kind):
@@ -462,8 +465,12 @@ def run_stack(helper, indent=''):
     for kind in [Roles.RB, Roles.DB, Roles.MAP, Roles.CAP, Roles.HV]:
         for server in helper.iter_server_by_kind(kind):
             substep = "%s@%s" % (kind.name, server.name)
+            store = munch.Munch({
+                'kind': kind,
+                'server': server,
+            })
             helper.run_and_track(make_runner(server), indent=indent + "  ",
-                                 substep=substep)
+                                 substep=substep, store=store)
 
 
 def create_local_files(helper, indent=''):
