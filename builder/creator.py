@@ -642,7 +642,7 @@ def reconcile_servers(args, cloud, tracker,
     print("Performing reconciliation,"
           " destroying %s existing servers." % (len(existing_servers)))
     for server in existing_servers:
-        with utils.Spinner("Destroying"
+        with utils.Spinner("  Destroying"
                            " server %s" % server.name, args.verbose):
             cloud.delete_server(server.name, wait=True)
         tracker.pop(server.name, None)
