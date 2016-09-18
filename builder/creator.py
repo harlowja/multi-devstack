@@ -66,10 +66,10 @@ class Helper(object):
         self.servers = tuple(servers)
         self.machines = {}
         self.tracker = tracker
-        self.exit_stack = contextlib2.ExitStack()
         self.cloud = cloud
         self._settings = None
         self._args = args
+        self._exit_stack = contextlib2.ExitStack()
 
     @property
     def settings(self):
@@ -168,10 +168,10 @@ class Helper(object):
             raise RuntimeError("Can not match ssh machine"
                                " to unknown server '%s'" % server_name)
         self.machines[server_name] = machine
-        self.exit_stack.callback(machine.close)
+        self._exit_stack.callback(machine.close)
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        self.exit_stack.close()
+        self._exit_stack.close()
 
 
 def pos_int(val):
