@@ -92,15 +92,20 @@ class Helper(object):
         store_name = ":".join([func.__module__, func.__name__])
         return store_name in self.tracker
 
-    def run_and_track(self, func, always_run=False, indent=''):
-        step_num = self.steps_ran + 1
-        print("%sActivating step %s." % (indent, step_num))
-        self.steps_ran += 1
+    def run_and_track(self, func, always_run=False, indent='', substep=None):
+        step = str(self.steps_ran + 1)
+        if substep is not None:
+            step = "%s.%s" % (step, substep)
+        print("%sActivating step %s." % (indent, step))
+        if substep is None:
+            self.steps_ran += 1
         print("%s  Name: '%s'" % (indent, func.__name__))
         func_details = getattr(func, '__doc__', '')
         if func_details:
             print("%s  Details: '%s'" % (indent, func_details))
         store_name = ":".join([func.__module__, func.__name__])
+        if substep is not None:
+            store_name += ".%s" % substep
         print("%s  Stored under: '%s'" % (indent, store_name))
         if store_name not in self.tracker or always_run:
             t_start = utils.now()
@@ -109,13 +114,12 @@ class Helper(object):
             t_elapsed = t_end - t_start
             self.tracker[store_name] = (result, datetime.utcnow(), t_elapsed)
             self.tracker.sync()
-            print('%sStep %s has finished in %0.2f seconds' % (indent,
-                                                               step_num,
+            print('%sStep %s has finished in %0.2f seconds' % (indent, step,
                                                                t_elapsed))
         else:
             result, finished_on, t_elapsed = self.tracker[store_name]
             print('%sStep %s was previously'
-                  ' finished on %s' % (indent, step_num,
+                  ' finished on %s' % (indent, step,
                                        finished_on.isoformat()))
         return result
 
