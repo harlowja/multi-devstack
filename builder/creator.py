@@ -778,7 +778,7 @@ def create(args, cloud, tracker):
     existing_servers, new_servers = bake_servers(args, cloud, tracker, topo)
     needs_rebuild = reconcile_servers(args, cloud, tracker,
                                       existing_servers, new_servers)
-    new_server_names = set([server.name for name in new_servers])
+    new_server_names = set([server.name for server in new_servers])
     rebuilds = 0
     while needs_rebuild:
         rebuilds += 1
@@ -786,7 +786,7 @@ def create(args, cloud, tracker):
                                                      tracker, topo)
         needs_rebuild = reconcile_servers(args, cloud, tracker,
                                           existing_servers, new_servers)
-        new_server_names.update([server.name for name in new_servers])
+        new_server_names.update([server.name for server in new_servers])
     servers = list(existing_servers)
     servers.extend(new_servers)
     # Add records for all servers (new or old).
