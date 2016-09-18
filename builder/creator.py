@@ -88,6 +88,10 @@ class Helper(object):
             self._settings = settings
             return self._settings
 
+    def has_finished(self, func):
+        store_name = ":".join([func.__module__, func.__name__])
+        return store_name in self.tracker
+
     def run_and_track(self, func, always_run=False, indent=''):
         step_num = self.steps_ran + 1
         print("%sActivating step %s." % (indent, step_num))
@@ -655,7 +659,11 @@ def transform(helper):
 
 
 def create(args, cloud, tracker):
-    """Create a new environment."""
+    """Creates/continues building a new environment."""
+    if tracker.has_finished(run_stack):
+        raise RuntimeError("We currently do not support re-stacking"
+                           " a cloud, so please `destroy` the current one"
+                           " before running")
     with utils.Spinner("Validating arguments against cloud", args.verbose):
         # Due to some funkiness with our openstack we have to list out
         # the az's and pick one, typically favoring ones with 'cor' in there
