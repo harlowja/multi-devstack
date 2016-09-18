@@ -34,4 +34,34 @@ be done:
      run **ensure to run** ``./build destroy`` before re-running because
      those commands are not idempotent (the other actions are).
 
+What it does (during create)
+----------------------------
+
+* Creates a cloud instance (configuring itself via the mechanisms
+  supported by the `shade`_ library).
+* Creates/opens a local sqlite3 database (used for state tracking and data
+  retention; primarily used for resuming, allowing for this program
+  to be mostly crash-tolerant).
+* Validates provided ``create`` arguments against the matched cloud (for
+  example to ensure the image provided is actually found).
+* Creates a desired instance layout (and saves it).
+* Scans current cloud servers and sees if layout is satisfied (if not servers
+  are spawned to match the desired layout).
+* Performs (and records what was done and what was not) remote server
+  commands on all matched (or spawned) servers to turn
+  them into a multi-node `devstack`_ cloud.
+
+What it does (during destroy)
+-----------------------------
+
+* Creates a cloud instance (configuring itself via the mechanisms
+  supported by the `shade`_ library).
+* Creates/opens a local sqlite3 database (used for state tracking and data
+  retention; primarily used for resuming, allowing for this program
+  to be mostly crash-tolerant).
+* Extracts prior servers from local sqlite3 database and
+  destroys them (by whatever mechanism the underlying cloud performs
+  such actions).
+
 .. _devstack: http://docs.openstack.org/developer/devstack/
+.. _shade: https://pypi.python.org/pypi/shade
