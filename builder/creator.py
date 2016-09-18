@@ -569,8 +569,6 @@ def wait_servers(args, cloud, tracker, servers):
                                " was found associated" % server.name)
         server.ip = server_ip
         servers[i] = server
-        tracker['servers'] = servers
-        tracker.sync()
     return servers
 
 
