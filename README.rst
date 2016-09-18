@@ -28,7 +28,10 @@ be done:
         OS_TENANT_NAME=user-jxharlow
 
 3. Run the ``./build create`` python and watch the steps trigger that
-   once successful will have build yourself a cluster (if it
-   fails **ensure to run** ``./build destroy`` before re-running).
+   once successful will have build yourself a cluster.
+
+   * If it fails after the ``stack.sh`` commands have started to
+     run **ensure to run** ``./build destroy`` before re-running because
+     those commands are not idempotent (the other actions are).
 
 .. _devstack: http://docs.openstack.org/developer/devstack/
