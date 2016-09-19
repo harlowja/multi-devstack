@@ -269,20 +269,6 @@ def bind_subparser(subparsers):
     return parser_create
 
 
-def create_meta(cloud):
-    """Makes godaddy specific nova metadata."""
-    return {
-        "login_users": "DC1\\%s" % cloud.auth['username'],
-        "login_groups": "DC1\\ac_devcloud",
-        "created_by": cloud.auth['username'],
-        "project_name": cloud.auth['project_name'],
-        # We can't use this correctly, because the ssh validation
-        # never works out if we do try to use this... perhaps a later
-        # fix needed...
-        'disable_pbis': 'true',
-    }
-
-
 def make_az_selector(azs):
     """Picks a az the best it can (given a list of azs)."""
 
@@ -486,7 +472,6 @@ def run_stack(args, helper, indent=''):
 
 def create_local_files(args, helper, indent=''):
     """Creates and uploads all local.conf files for devstack."""
-    template_fetcher = args.template_fetcher
     params = helper.settings.copy()
     # This needs to be done so that servers that will not have rabbit
     # or the database on them (but need to access it will still have
@@ -504,7 +489,7 @@ def create_local_files(args, helper, indent=''):
                            " %s" % (indent, server.hostname), args.verbose):
             local_path = os.path.join(args.scratch_dir,
                                       "local.%s.conf" % server.hostname)
-            tpl = template_fetcher(
+            tpl = args.template_fetcher(
                 "local.%s.tpl" % server.kind.name.lower())
             tpl_contents = tpl.render(**params)
             if not tpl_contents.endswith("\n"):
@@ -688,6 +673,12 @@ def bake_servers(args, cloud, tracker, topo):
         print("  Creating:")
         for instance in missing:
             print("    - %s" % instance.name)
+        md_tpl = args.template_fetcher("md.tpl")
+        md_params = {
+            'username': cloud.auth['username'],
+            'project_name': cloud.auth['project_name'],
+        }
+        md = md_tpl.render(**md_params)
         with utils.Spinner("  Spawning", args.verbose):
             for instance in missing:
                 # Save this so that if we kill the program
@@ -700,7 +691,7 @@ def bake_servers(args, cloud, tracker, topo):
                     instance.flavor, auto_ip=False,
                     key_name=args.key_name,
                     availability_zone=instance.availability_zone,
-                    meta=create_meta(cloud), userdata=instance.userdata,
+                    meta=md, userdata=instance.userdata,
                     wait=False)
                 server.kind = instance.kind
                 new_names.append(instance.name)
