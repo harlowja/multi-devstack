@@ -79,7 +79,7 @@ def main():
             print("Action: '%s'" % (args.func.__doc__))
             print("State: '%s'" % tracker.filename)
             print("State table: '%s'" % tracker.tablename)
-            print("Cloud: ")
+            print("Cloud:")
             pretty_cloud = collections.OrderedDict([
                 ('Authentication url', cloud.auth['auth_url']),
                 ('Authentication token', cloud.auth_token),
@@ -89,7 +89,7 @@ def main():
             blob = pprint.pformat(pretty_cloud)
             for line in blob.splitlines():
                 print("  " + line)
-            print("Cloud user/project: ")
+            print("Cloud user/project:")
             pretty_cloud = collections.OrderedDict()
             pretty_cloud['User'] = cloud.auth['username']
             pretty_cloud['Project'] = cloud.auth['project_name']
