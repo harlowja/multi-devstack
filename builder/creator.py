@@ -359,8 +359,6 @@ def install_some_packages(args, helper, indent=''):
         machine = helper.machines[server.name]
         sudo = machine['sudo']
         yum = sudo[machine['yum']]
-        record_path = os.path.join(args.scratch_dir,
-                                   "%s.yum_install" % (server.hostname))
         remote_cmds.append(
             utils.RemoteCommand(
                 yum, "-y", "install",
@@ -371,8 +369,8 @@ def install_some_packages(args, helper, indent=''):
                 # Otherwise it ends badly at stack.sh run-time... (maybe
                 # something we can fix in devstack?)
                 'mariadb',
-                record_path=record_path,
-                server_name=server.hostname))
+                scratch_dir=args.scratch_dir,
+                server=server))
     if remote_cmds:
         max_workers = min(len(remote_cmds), args.max_workers)
         utils.run_and_record(remote_cmds,
@@ -383,16 +381,14 @@ def install_some_packages(args, helper, indent=''):
         sudo = machine['sudo']
         yum = sudo[machine['yum']]
         service = sudo[machine['service']]
-        record_path = os.path.join(args.scratch_dir,
-                                   "%s.yum_install" % (server.hostname))
         utils.run_and_record([
             utils.RemoteCommand(
                 yum, "-y", "install",
                 # This is mainly for the hypervisors, but installing it
                 # everywhere shouldn't hurt.
                 'openvswitch',
-                record_path=record_path,
-                server_name=server.hostname)
+                scratch_dir=args.scratch_dir,
+                server=server)
         ], verbose=args.verbose, indent=indent)
         service('openvswitch', 'restart')
 
@@ -477,12 +473,10 @@ def run_stack(args, helper, indent=''):
         for kind in group:
             for server in helper.iter_server_by_kind(kind):
                 machine = helper.machines[server.name]
-                record_path = os.path.join(args.scratch_dir,
-                                           "%s.stack" % server.hostname)
                 run_cmds.append(
-                    utils.RemoteCommand(
-                        machine[stack_sh], record_path=record_path,
-                        server_name=server.hostname))
+                    utils.RemoteCommand(machine[stack_sh],
+                                        scratch_dir=args.scratch_dir,
+                                        server=server))
                 servers.append(server)
         if run_cmds:
             helper.run_cmds_and_track(run_cmds, servers,

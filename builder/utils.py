@@ -100,26 +100,43 @@ class RemoteCommand(object):
     def __init__(self, cmd, *cmd_args, **kwargs):
         self.cmd = cmd
         self.cmd_args = cmd_args
-        record_path = kwargs.get('record_path')
-        if record_path:
-            self.stdout_record_path = "%s.stdout" % record_path
-            self.stderr_record_path = "%s.stderr" % record_path
-        else:
-            self.stdout_record_path = os.devnull
-            self.stderr_record_path = os.devnull
-        server_name = kwargs.get('server_name')
-        if server_name:
-            self.server_name = server_name
-        else:
-            self.server_name = cmd.machine.host
+        self.server = kwargs.get('server')
+        self.scratch_dir = kwargs.get('scratch_dir')
         self.name = " ".join(cmd.formulate())
+        self.full_name = name
+        if cmd_args:
+            self.full_name += " "
+            self.full_name += " ".join([str(a) for a in cmd_args])
+
+    @property
+    def stderr_path(self):
+        if not self.scratch_dir:
+            return os.devnull
+        host = None
+        if self.server:
+            host = self.server.name
+        if not host:
+            host = self.cmd.machine.host
+        return os.path.join(self.scratch_dir, "%s.stderr" % host)
+
+    @property
+    def stdout_path(self):
+        if not self.scratch_dir:
+            return os.devnull
+        host = None
+        if self.server:
+            host = self.server.name
+        if not host:
+            host = self.cmd.machine.host
+        return os.path.join(self.scratch_dir, "%s.stdout" % host)
 
     def __str__(self):
-        pretty_cmd = self.name
-        if self.cmd_args:
-            pretty_cmd += " "
-            pretty_cmd += " ".join([str(a) for a in self.cmd_args])
-        return "`%s` running on server '%s'" % (pretty_cmd, self.server_name)
+        host = None
+        if self.server:
+            host = self.server.name
+        if not host:
+            host = self.cmd.machine.host
+        return "`%s` running on server '%s'" % (self.full_name, host)
 
 
 def safe_open(path, mode):
@@ -149,6 +166,15 @@ def run_and_record(remote_cmds, indent="",
     def cmd_runner(remote_cmd, index, stdout_fh, stderr_fh):
         if on_start is not None:
             on_start(remote_cmd, index)
+        header_msg = "Running `%s`" % remote_cmd.full_name
+        header = [
+            "=" * len(header_msg),
+            header_msg,
+            "=" * len(header_msg),
+        ]
+        for line in header:
+            print(line, file=stdout_fh)
+            print(line, file=stderr_fh)
         cmd = remote_cmd.cmd
         cmd_args = remote_cmd.cmd_args
         for stdout, stderr in cmd.popen(cmd_args).iter_lines():
@@ -165,10 +191,10 @@ def run_and_record(remote_cmds, indent="",
     with contextlib2.ExitStack() as e_stack:
         for index, remote_cmd in enumerate(remote_cmds):
             print("%sRunning %s" % (indent, remote_cmd))
-            stderr_path = remote_cmd.stderr_record_path
+            stderr_path = remote_cmd.stderr_path
             stderr_fh = safe_open(stderr_path, 'a+b')
             e_stack.callback(stderr_fh.close)
-            stdout_path = remote_cmd.stdout_record_path
+            stdout_path = remote_cmd.stdout_path
             stdout_fh = safe_open(stdout_path, 'a+b')
             e_stack.callback(stdout_fh.close)
             for (kind, filename) in [('stdout', stdout_fh.name),
