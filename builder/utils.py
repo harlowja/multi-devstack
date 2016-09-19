@@ -103,7 +103,7 @@ class RemoteCommand(object):
         self.server = kwargs.get('server')
         self.scratch_dir = kwargs.get('scratch_dir')
         self.name = " ".join(cmd.formulate())
-        self.full_name = name
+        self.full_name = self.name
         if cmd_args:
             self.full_name += " "
             self.full_name += " ".join([str(a) for a in cmd_args])
