@@ -28,6 +28,14 @@ def main():
     prog_name = os.getenv("PROGRAM_NAME", default=sys.argv[0])
     prog_name = os.path.basename(prog_name)
     parser = argparse.ArgumentParser(prog=prog_name)
+    parser.add_argument("--cloud",
+                        help="specific os-client-config cloud to"
+                             " target (if not provided one will be found)",
+                        metavar="CLOUD")
+    parser.add_argument("--cloud-region",
+                        help="specific os-client-config cloud region to"
+                             " target (if not provided one will be found)",
+                        metavar="REGION")
     parser.add_argument("--state",
                         help="file to read/write action state"
                              " information into/from (default=%(default)s)",
@@ -57,9 +65,12 @@ def main():
         # No options provided...
         logging.basicConfig(level=logging.WARN)
     try:
-        cloud = shade.openstack_cloud()
+        cloud = shade.openstack_cloud(cloud=args.cloud,
+                                      region_name=args.cloud_region)
         table_hasher = hashlib.new("md5")
         table_hasher.update(cloud.auth['auth_url'])
+        if cloud.region_name:
+            table_hasher.update(cloud.region_name)
         table_hasher.update(cloud.auth['username'])
         table_hasher.update(cloud.auth['project_name'])
         with sqlitedict.SqliteDict(filename=args.state, flag='c',
@@ -69,12 +80,20 @@ def main():
             print("State: '%s'" % tracker.filename)
             print("State table: '%s'" % tracker.tablename)
             print("Cloud: ")
-            blob = pprint.pformat(collections.OrderedDict([
+            pretty_cloud = collections.OrderedDict([
                 ('Authentication url', cloud.auth['auth_url']),
                 ('Authentication token', cloud.auth_token),
-                ('User', cloud.auth['username']),
-                ('Project', cloud.auth['project_name']),
-            ]))
+            ])
+            if cloud.region_name:
+                pretty_cloud['Region'] = cloud.region_name
+            blob = pprint.pformat(pretty_cloud)
+            for line in blob.splitlines():
+                print("  " + line)
+            print("Cloud user/project: ")
+            pretty_cloud = collections.OrderedDict()
+            pretty_cloud['User'] = cloud.auth['username']
+            pretty_cloud['Project'] = cloud.auth['project_name']
+            blob = pprint.pformat(pretty_cloud)
             for line in blob.splitlines():
                 print("  " + line)
             args.func(args, cloud, tracker)
