@@ -54,6 +54,7 @@ DEF_TOPO = {
 }
 HV_NAME_TPL = '%(user)s-hv-%(rand)s'
 STACK_SH = '/home/%s/devstack/stack.sh' % DEF_USER
+STACK_SOURCE = 'git://git.openstack.org/openstack-dev/devstack'
 LOG = logging.getLogger(__name__)
 
 
@@ -259,12 +260,6 @@ def bind_subparser(subparsers):
                                      " directory (default=%(default)s)"),
                                default=os.path.join(os.getcwd(), "repos.d"),
                                metavar="PATH")
-    parser_create.add_argument("--source",
-                               help=("git url of"
-                                     " devstack (default=%(default)s"),
-                               default=("git://git.openstack.org/"
-                                        "openstack-dev/devstack"),
-                               metavar="URL")
     parser_create.set_defaults(func=create)
     return parser_create
 
@@ -320,19 +315,26 @@ def initial_prep_work(args, helper, indent=''):
 
 
 def clone_devstack(args, helper, indent=''):
-    """Clears prior devstack and clones devstack + adjusts branch."""
+    """Adjusts prior devstack and/or clones devstack + adjusts branch."""
     print("%sCloning devstack:" % (indent))
-    print("%s  Source: %s" % (indent, args.source))
     print("%s  Branch: %s" % (indent, args.branch))
     for server in helper.servers:
         machine = helper.machines[server.name]
-        with utils.Spinner("%sCloning devstack"
-                           " in %s" % (indent, server.hostname), args.verbose):
-            rm = machine["rm"]
-            rm("-rf", "devstack")
-            git = machine['git']
-            git("clone", args.source)
-            git('checkout', args.branch, cwd="devstack")
+        old_path = machine.path("devstack")
+        if not old_path.exists():
+            with utils.Spinner("%sCloning devstack"
+                               " in %s" % (indent, server.hostname),
+                               args.verbose):
+                git = machine['git']
+                git("clone", STACK_SOURCE, "devstack")
+                git('checkout', args.branch, cwd="devstack")
+        else:
+            with utils.Spinner("%Resetting devstack"
+                               " in %s" % (indent, server.hostname),
+                               args.verbose):
+                git = machine['git']
+                git("reset", "--hard", "HEAD", cwd='devstack')
+                git('checkout', args.branch, cwd="devstack")
 
 
 def install_some_packages(args, helper, indent=''):
