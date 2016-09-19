@@ -314,7 +314,8 @@ def initial_prep_work(args, helper, indent=''):
         machine['touch'](".gitconfig")
         git = machine['git']
         creator = helper.cloud.auth['username']
-        git("config", "--global", "user.email", "%s@godaddy.com" % creator)
+        git("config", "--global", "user.email",
+            "%s@%s.com" % (creator, creator))
         git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
 
 
