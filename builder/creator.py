@@ -3,6 +3,7 @@ from __future__ import print_function
 import argparse
 import copy
 import itertools
+import json
 import logging
 import multiprocessing
 import os
@@ -301,8 +302,8 @@ def make_az_selector(azs):
     return az_selector
 
 
-def initial_prep_work(args, helper, indent=''):
-    """Performs some initial setup on the servers post-boot."""
+def setup_git(args, helper, indent=''):
+    """Performs initial git setup/config on the servers."""
     for server in helper.servers:
         machine = helper.machines[server.name]
         machine['mkdir']("-p", ".git")
@@ -335,6 +336,34 @@ def clone_devstack(args, helper, indent=''):
                 git = machine['git']
                 git("reset", "--hard", "HEAD", cwd='devstack')
                 git('checkout', args.branch, cwd="devstack")
+
+
+def interconnect_ssh(args, helper, indent):
+    """Copies each servers ssh key to each other server."""
+    for server in helper.servers:
+        machine = helper.machines[server.name]
+        mkdir = machine['mkdir']
+        mkdir(".ssh", "-p")
+        auth_keys_path = machine.path(".ssh/authorized_keys")
+        auth_keys_path.touch()
+        auth_keys_path.chmod(0600)
+    for server in helper.servers:
+        machine = helper.machines[server.name]
+        server_pub_key = machine.path("/etc/ssh/ssh_host_rsa_key.pub").read()
+        for next_server in helper.servers:
+            if next_server is server:
+                continue
+            n_machine = helper.machines[next_server.name]
+            cur_auth_keys = n_machine.path(".ssh/authorized_keys").read()
+            if not cur_auth_keys.endswith("\n"):
+                cur_auth_keys += "\n"
+            cur_auth_keys += server_pub_key
+            if not cur_auth_keys.endswith("\n"):
+                cur_auth_keys += "\n"
+            new_auth_keys_path = n_machine.path(".ssh/authorized_keys.new")
+            new_auth_keys_path.write(cur_auth_keys)
+            new_auth_keys_path.move(".ssh/authorized_keys")
+            new_auth_keys_path.chmod(0600)
 
 
 def install_some_packages(args, helper, indent=''):
@@ -676,12 +705,17 @@ def bake_servers(args, cloud, tracker, topo):
         print("  Creating:")
         for instance in missing:
             print("    - %s" % instance.name)
-        md_tpl = args.template_fetcher("md.tpl")
-        md_params = {
-            'username': cloud.auth['username'],
-            'project_name': cloud.auth['project_name'],
-        }
-        md = md_tpl.render(**md_params)
+        try:
+            meta_tpl = args.template_fetcher("md.tpl")
+        except jinja2.TemplateNotFound:
+            meta = None
+        else:
+            meta_params = {
+                'username': cloud.auth['username'],
+                'project_name': cloud.auth['project_name'],
+            }
+            meta = meta_tpl.render(**meta_params)
+            meta = json.loads(meta)
         with utils.Spinner("  Spawning", args.verbose):
             for instance in missing:
                 # Save this so that if we kill the program
@@ -694,7 +728,7 @@ def bake_servers(args, cloud, tracker, topo):
                     instance.flavor, auto_ip=False,
                     key_name=args.key_name,
                     availability_zone=instance.availability_zone,
-                    meta=md, userdata=instance.userdata,
+                    meta=meta, userdata=instance.userdata,
                     wait=False)
                 server.kind = instance.kind
                 new_names.append(instance.name)
@@ -707,7 +741,8 @@ def bake_servers(args, cloud, tracker, topo):
 def transform(helper):
     """Turn (mostly) raw servers into useful things."""
     helper.run_func_and_track(bind_hostnames, on_prior=lambda result: True)
-    helper.run_func_and_track(initial_prep_work)
+    helper.run_func_and_track(interconnect_ssh)
+    helper.run_func_and_track(setup_git)
     helper.run_func_and_track(upload_repos)
     helper.run_func_and_track(install_some_packages)
     helper.run_func_and_track(clone_devstack)
