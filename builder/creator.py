@@ -679,7 +679,7 @@ def bake_servers(args, cloud, tracker, topo):
     if found:
         print("  Found:")
         for instance in found:
-            print("    %s" % instance.name)
+            print("    - %s" % instance.name)
     else:
         print("  Found none.")
     new_names = []
@@ -687,7 +687,7 @@ def bake_servers(args, cloud, tracker, topo):
     if missing:
         print("  Creating:")
         for instance in missing:
-            print("    %s" % instance.name)
+            print("    - %s" % instance.name)
         with utils.Spinner("  Spawning", args.verbose):
             for instance in missing:
                 # Save this so that if we kill the program
