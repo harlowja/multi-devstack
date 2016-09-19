@@ -2,6 +2,7 @@ plumbum
 shade
 paramiko
 monotonic
+munch
 futurist
 jinja2
 six
