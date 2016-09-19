@@ -96,23 +96,22 @@ class Helper(object):
         def on_start(remote_cmd, index):
             server = to_run_servers[index]
             record = self.tracker[server.name]
-            record.cmds[remote_cmd.name] = munch.Munch(started=True,
-                                                       finished=False)
+            record.cmds[remote_cmd.full_name] = munch.Munch(started=True,
+                                                            finished=False)
             self.tracker[server.name] = record
             self.tracker.sync()
 
         def on_done(remote_cmd, index):
             server = to_run_servers[index]
             record = self.tracker[server.name]
-            last = record.cmds[remote_cmd.name]
+            last = record.cmds[remote_cmd.full_name]
             last.finished = True
             self.tracker[server.name] = record
             self.tracker.sync()
 
         for server, remote_cmd in itertools.izip(servers, remote_cmds):
             record = self.tracker[server.name]
-            cmd_name = remote_cmd.name
-            last = record.cmds.get(cmd_name)
+            last = record.cmds.get(remote_cmd.full_name)
             if last is not None:
                 if on_prior is not None:
                     should_run = on_prior(server, remote_cmd, last)
