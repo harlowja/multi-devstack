@@ -4,6 +4,8 @@ A python-based multi-node devstack tool
 
 Made by people that care.
 
+*Contributions welcome!*
+
 How to use it
 -------------
 
@@ -62,6 +64,15 @@ What it does (during destroy)
 * Extracts prior servers from local sqlite3 database and
   destroys them (by whatever mechanism the underlying cloud performs
   such actions).
+
+What is not done (yet)
+----------------------
+
+* Creating a overlay network (so that the VMs
+  spawned can connect and communicate, likely in a private
+  only fashion).
+* Ensuring the hypervisors spun up are all connected
+  together correctly.
 
 .. _devstack: http://docs.openstack.org/developer/devstack/
 .. _shade: https://pypi.python.org/pypi/shade
