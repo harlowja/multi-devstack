@@ -4,8 +4,6 @@ A python-based multi-node devstack tool
 
 Made by people that care.
 
-*Contributions welcome!*
-
 How to use it
 -------------
 
@@ -71,8 +69,25 @@ What is not done (yet)
 * Creating a overlay network (so that the VMs
   spawned can connect and communicate, likely in a private
   only fashion).
+
+  * Perhaps using something inspired by and/or like
+    https://github.com/openstack-infra/devstack-gate/blob/master/functions.sh#L1105 ?
+
 * Ensuring the hypervisors spun up are all connected
-  together correctly.
+  together correctly and actually work.
+* Making sure the cells (parent and child nova cell)
+  actually works.
+* Using neutron (vs nova-net).
+* Making it easier to plug-in new projects (in some modular
+  manner?).
+
+Get involved
+------------
+
+Contributions are always welcome, find me on IRC
+or `openstack-dev`_ (ML) or in person or just open
+a pull request.
 
 .. _devstack: http://docs.openstack.org/developer/devstack/
 .. _shade: https://pypi.python.org/pypi/shade
+.. _openstack-dev: http://lists.openstack.org/pipermail/openstack-dev/
