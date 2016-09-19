@@ -82,6 +82,12 @@ What is not done (yet)
   manner?).
 * Removing various godaddy artifacts (metadata for example).
 
+Examples
+--------
+
+* https://asciinema.org/a/86254
+* https://asciinema.org/a/86253
+
 Get involved
 ------------
 
