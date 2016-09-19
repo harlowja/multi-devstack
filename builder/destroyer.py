@@ -32,7 +32,7 @@ def destroy(args, cloud, tracker):
             server_name = maybe_servers.pop()
             tracker.pop(server_name, None)
             if server_name in all_servers:
-                with utils.Spinner("Destroying server %s" % server_name,
+                with utils.Spinner("  Destroying server %s" % server_name,
                                    args.verbose):
                     if args.no_wait:
                         cloud.delete_server(server_name, wait=False)
