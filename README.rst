@@ -80,6 +80,7 @@ What is not done (yet)
 * Using neutron (vs nova-net).
 * Making it easier to plug-in new projects (in some modular
   manner?).
+* Removing various godaddy artifacts (metadata for example).
 
 Get involved
 ------------
