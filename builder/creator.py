@@ -382,6 +382,8 @@ def interconnect_ssh(args, helper, indent=''):
                     contents.write(pub_key)
                     contents.write("\n")
             machine = helper.machines[server.name]
+            # Do this in 2 steps to avoid overwriting if we can't
+            # upload it (for whatever reason).
             auth_keys_path = machine.path(".ssh/authorized_keys")
             new_auth_keys_path = machine.path(".ssh/authorized_keys.new")
             new_auth_keys_path.touch()
