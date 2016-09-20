@@ -353,14 +353,23 @@ def interconnect_ssh(args, helper, indent=''):
             if not ssh_dir.exists():
                 ssh_dir.mkdir()
                 ssh_dir.chmod(0o700)
-            # Clear off any old keys.
+            # Clear off any old keys (unless already there).
+            found = 0
             for base_key in ["id_rsa", "id_rsa.pub"]:
                 key_path = machine.path("~/.ssh/%s" % base_key)
                 if key_path.isfile():
-                    key_path.delete()
-            key_gen = machine['ssh-keygen']
-            key_gen("-t", "rsa", "-f",
-                    "/home/%s/.ssh/id_rsa" % DEF_USER, "-N", "")
+                    found += 1
+            if found < 2:
+                # Ok forcefully regenerate them...
+                for base_key in ["id_rsa", "id_rsa.pub"]:
+                    key_path = machine.path("~/.ssh/%s" % base_key)
+                    if key_path.isfile():
+                        key_path.delete()
+                found = 0
+            if not found:
+                key_gen = machine['ssh-keygen']
+                key_gen("-t", "rsa", "-f",
+                        "/home/%s/.ssh/id_rsa" % DEF_USER, "-N", "")
             server_pub_key_path = machine.path(".ssh/id_rsa.pub")
             keys_to_server[server.name] = server_pub_key_path.read().strip()
     # Then distribute them.
