@@ -13,6 +13,7 @@ import contextlib2
 import futurist
 import jinja2
 import munch
+import six
 
 from builder import images
 from builder import pprint
@@ -162,8 +163,8 @@ class Helper(object):
             self.tracker.sync()
             return last.result
         else:
-            print("%sFunction '%s' was previously finished" % (indent,
-                                                               func_name))
+            print("%sFunction '%s' was previously finished." % (indent,
+                                                                func_name))
             return last.result
 
     def iter_server_by_kind(self, kind):
@@ -338,32 +339,65 @@ def clone_devstack(args, helper, indent=''):
                 git('checkout', args.branch, cwd="devstack")
 
 
-def interconnect_ssh(args, helper, indent):
-    """Copies each servers ssh key to each other server."""
+def interconnect_ssh(args, helper, indent=''):
+    """Creates & copies each stack users ssh key to each other server."""
+    # First generate keys...
+    keys_to_server = {}
     for server in helper.servers:
-        machine = helper.machines[server.name]
-        mkdir = machine['mkdir']
-        mkdir(".ssh", "-p")
-        auth_keys_path = machine.path(".ssh/authorized_keys")
-        auth_keys_path.touch()
-        auth_keys_path.chmod(0600)
-    for server in helper.servers:
-        machine = helper.machines[server.name]
-        server_pub_key = machine.path("/etc/ssh/ssh_host_rsa_key.pub").read()
-        for next_server in helper.servers:
-            if next_server is server:
-                continue
-            n_machine = helper.machines[next_server.name]
-            cur_auth_keys = n_machine.path(".ssh/authorized_keys").read()
-            if not cur_auth_keys.endswith("\n"):
-                cur_auth_keys += "\n"
-            cur_auth_keys += server_pub_key
-            if not cur_auth_keys.endswith("\n"):
-                cur_auth_keys += "\n"
-            new_auth_keys_path = n_machine.path(".ssh/authorized_keys.new")
-            new_auth_keys_path.write(cur_auth_keys)
-            new_auth_keys_path.move(".ssh/authorized_keys")
-            new_auth_keys_path.chmod(0600)
+        with utils.Spinner("%sGenerating ssh key for"
+                           " %s" % (indent, server.name), args.verbose):
+            machine = helper.machines[server.name]
+            ssh_dir = machine.path(".ssh")
+            if not ssh_dir.exists():
+                ssh_dir.mkdir()
+                ssh_dir.chmod(0o700)
+            # Clear off any old keys.
+            for base_key in ["id_rsa", "id_rsa.pub"]:
+                key_path = machine.path("~/.ssh/%s" % base_key)
+                if key_path.isfile():
+                    key_path.delete()
+            key_gen = machine['ssh-keygen']
+            key_gen("-t", "rsa", "-f",
+                    "/home/%s/.ssh/id_rsa" % DEF_USER, "-N", "")
+            server_pub_key_path = machine.path(".ssh/id_rsa.pub")
+            keys_to_server[server.name] = server_pub_key_path.read().strip()
+    # Then distribute them.
+    with utils.Spinner("%s- Distributing public"
+                       " ssh keys" % indent, args.verbose):
+        for server in helper.servers:
+            contents = six.StringIO()
+            for server_name, pub_key in keys_to_server.items():
+                if server_name != server.name:
+                    contents.write(pub_key)
+                    contents.write("\n")
+            machine = helper.machines[server.name]
+            auth_keys_path = machine.path(".ssh/authorized_keys")
+            new_auth_keys_path = machine.path(".ssh/authorized_keys.new")
+            new_auth_keys_path.touch()
+            new_auth_keys_path.write(contents.getvalue())
+            new_auth_keys_path.chmod(0o600)
+            new_auth_keys_path.move(auth_keys_path)
+    # Then adjust known_hosts so no prompt occurs when connecting.
+    with utils.Spinner("%s- Adjusting known_hosts"
+                       " files" % indent, args.verbose):
+        for server in helper.servers:
+            machine = helper.machines[server.name]
+            key_scan = machine['ssh-keyscan']
+            key_gen = machine['ssh-keygen']
+            known_hosts_path = machine.path(".ssh/known_hosts")
+            known_hosts_path.touch()
+            contents = six.StringIO()
+            for next_server in helper.servers:
+                if next_server is not server:
+                    key_gen("-R", next_server.hostname)
+                    stdout = key_scan("-t", "ssh-rsa",
+                                      next_server.hostname)
+                    contents.write(stdout.strip())
+                    contents.write("\n")
+            new_known_hosts_path = machine.path(".ssh/known_hosts.new")
+            new_known_hosts_path.touch()
+            new_known_hosts_path.write(contents.getvalue())
+            new_known_hosts_path.move(known_hosts_path)
 
 
 def install_some_packages(args, helper, indent=''):
