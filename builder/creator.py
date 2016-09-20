@@ -138,7 +138,7 @@ class Helper(object):
         func_name = ":".join([func.__module__, func.__name__])
         print("%sActivating function '%s'" % (indent, func_name))
         if func_details:
-            print("%s  Details: '%s'" % (indent, func_details))
+            print("%sDetails: '%s'" % (indent, func_details))
         funcs = self.tracker['funcs']
         last = funcs.get(func_name)
         if last is not None:
@@ -146,10 +146,7 @@ class Helper(object):
                 last = None
         if last is None:
             start = utils.now()
-            if func_details:
-                tmp_indent = indent + "    "
-            else:
-                tmp_indent = indent + "  "
+            tmp_indent = indent + "  "
             result = func(self._args, self, indent=tmp_indent)
             end = utils.now()
             elapsed = end - start
