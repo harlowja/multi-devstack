@@ -333,7 +333,7 @@ def clone_devstack(args, helper, indent=''):
                 git("clone", STACK_SOURCE, "devstack")
                 git('checkout', args.branch, cwd="devstack")
         else:
-            with utils.Spinner("%Resetting devstack"
+            with utils.Spinner("%sResetting devstack"
                                " in %s" % (indent, server.hostname),
                                args.verbose):
                 git = machine['git']
