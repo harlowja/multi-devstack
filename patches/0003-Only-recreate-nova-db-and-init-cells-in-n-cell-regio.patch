@@ -1,0 +1,57 @@
+From f8986a77d6830ef42e154c66f1a8b69b13df32d4 Mon Sep 17 00:00:00 2001
+From: Joshua Harlow <jxharlow@godaddy.com>
+Date: Tue, 20 Sep 2016 14:59:44 -0700
+Subject: [PATCH] Only recreate nova db and init cells in n-cell-region
+
+Change-Id: Ief0c95bf0b857a1ab411735179236ec3b7d540cc
+---
+ lib/nova | 13 ++++++++-----
+ 1 file changed, 8 insertions(+), 5 deletions(-)
+
+diff --git a/lib/nova b/lib/nova
+index ac222ab..2cf0459 100644
+--- a/lib/nova
++++ b/lib/nova
+@@ -674,13 +674,13 @@ function create_nova_conf {
+ function init_nova_cells {
+     if is_service_enabled n-cell; then
+         cp $NOVA_CONF $NOVA_CELLS_CONF
++
+         iniset $NOVA_CELLS_CONF database connection `database_connection_url $NOVA_CELLS_DB`
+         iniset $NOVA_CELLS_CONF DEFAULT rabbit_virtual_host child_cell
+         iniset $NOVA_CELLS_CONF DEFAULT dhcpbridge_flagfile $NOVA_CELLS_CONF
+         iniset $NOVA_CELLS_CONF cells enable True
+         iniset $NOVA_CELLS_CONF cells cell_type compute
+         iniset $NOVA_CELLS_CONF cells name child
+-
+         iniset $NOVA_CONF cells enable True
+         iniset $NOVA_CONF cells cell_type api
+         iniset $NOVA_CONF cells name region
+@@ -691,9 +691,12 @@ function init_nova_cells {
+             iniset $NOVA_CELLS_CONF DEFAULT enabled_apis metadata
+         fi
+ 
+-        $NOVA_BIN_DIR/nova-manage --config-file $NOVA_CELLS_CONF db sync
+-        $NOVA_BIN_DIR/nova-manage --config-file $NOVA_CELLS_CONF cell create --name=region --cell_type=parent --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=/ --woffset=0 --wscale=1
+-        $NOVA_BIN_DIR/nova-manage cell create --name=child --cell_type=child --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=child_cell --woffset=0 --wscale=1
++        # Only do this on the top level cell
++        if is_service_enabled n-cell-region; then
++            $NOVA_BIN_DIR/nova-manage --config-file $NOVA_CELLS_CONF db sync
++            $NOVA_BIN_DIR/nova-manage --config-file $NOVA_CELLS_CONF cell create --name=region --cell_type=parent --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=/ --woffset=0 --wscale=1
++            $NOVA_BIN_DIR/nova-manage cell create --name=child --cell_type=child --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=child_cell --woffset=0 --wscale=1
++        fi
+     fi
+ }
+ 
+@@ -729,7 +732,7 @@ function init_nova_db {
+     # Migrate nova database
+     $NOVA_BIN_DIR/nova-manage db sync
+ 
+-    if is_service_enabled n-cell; then
++    if is_service_enabled n-cell-region; then
+         recreate_database $NOVA_CELLS_DB
+     fi
+ 
+-- 
+2.7.4 (Apple Git-66)
+
