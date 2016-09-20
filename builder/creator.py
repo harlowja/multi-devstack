@@ -313,6 +313,11 @@ def setup_git(args, helper, indent=''):
         git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
 
 
+def create_overlay(args, helper, indent=''):
+    """Sets up overlay network (allows for future VM connectivity)."""
+    pass
+
+
 def clone_devstack(args, helper, indent=''):
     """Adjusts prior devstack and/or clones devstack + adjusts branch."""
     print("%sCloning devstack:" % (indent))
@@ -771,6 +776,7 @@ def transform(helper):
     """Turn (mostly) raw servers into useful things."""
     helper.run_func_and_track(bind_hostnames, on_prior=lambda result: True)
     helper.run_func_and_track(interconnect_ssh)
+    helper.run_func_and_track(create_overlay)
     helper.run_func_and_track(setup_git)
     helper.run_func_and_track(upload_repos)
     helper.run_func_and_track(install_some_packages)
