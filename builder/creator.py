@@ -555,7 +555,7 @@ def run_stack(args, helper, indent=''):
                 reset_pth.touch()
                 reset_pth.write(reset_sh)
                 sudo = machine['sudo']
-                sudo_bash = sudo_bash[machine['bash']]
+                sudo_bash = sudo[machine['bash']]
                 sudo_bash(str(reset_pth), "")
 
 
