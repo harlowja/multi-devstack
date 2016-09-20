@@ -15,16 +15,15 @@ import jinja2
 import munch
 import six
 
+import builder
 from builder import images
 from builder import pprint
 from builder import utils
 
 from builder.roles import Roles
 
-# The default stack user name and password...
-#
-# Someday make this better?
-DEF_USER, DEF_PW = ('stack', 'stack')
+DEF_USER = builder.DEF_USER
+DEF_PW = builder.DEF_PW
 DEFAULT_SETTINGS = {
     # We can't seem to alter this one more than once,
     # so just leave it as is... todo fix this and make it so that
