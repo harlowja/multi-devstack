@@ -383,13 +383,11 @@ def interconnect_ssh(args, helper, indent=''):
         for server in helper.servers:
             machine = helper.machines[server.name]
             key_scan = machine['ssh-keyscan']
-            key_gen = machine['ssh-keygen']
             known_hosts_path = machine.path(".ssh/known_hosts")
             known_hosts_path.touch()
             contents = six.StringIO()
             for next_server in helper.servers:
                 if next_server is not server:
-                    key_gen("-R", next_server.hostname)
                     stdout = key_scan("-t", "ssh-rsa",
                                       next_server.hostname)
                     contents.write(stdout.strip())
