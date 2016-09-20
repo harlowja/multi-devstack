@@ -28,15 +28,8 @@ EOF
 
 function clean_exit(){
     local error_code="$?"
-    local spawned=$(jobs -p)
-    if [ -n "$spawned" ]; then
-        kill $(jobs -p)
-    fi
     if [ -f "$sql_file" ]; then
         rm "$sql_file"
-    fi
-    if [ -f "$pid_file" ]; then
-        kill $(cat $pid_file)
     fi
     return $error_code
 }
@@ -56,3 +49,14 @@ while [ ! -e "$sock_file" ]; do
 done
 
 mysql -u root < $sql_file
+
+mysqld_safe=$(cat $pid_file)
+echo "Stopping mysqld_safe pid: $mysqld_safe"
+kill $mysqld_safe
+
+while [ -e "$sock_file" ]; do
+    echo "Waiting for socket file $sock_file to disappear..."
+    sleep 5
+done
+
+systemctl restart mariadb

@@ -544,6 +544,19 @@ def run_stack(args, helper, indent=''):
                                       indent=indent + "  ",
                                       verbose=args.verbose,
                                       on_prior=on_prior)
+        if Roles.DB in group:
+            # Reset the database password to what it used to be...
+            for server in helper.iter_server_by_kind(Roles.DB):
+                machine = helper.machines[server.name]
+                tpl = args.template_fetcher("reset_mysql.tpl")
+                reset_sh = tpl.render()
+                reset_pth = machine.path(
+                    "/home/%s/devstack/reset_mysql.sh" % DEF_USER)
+                reset_pth.touch()
+                reset_pth.write(reset_sh)
+                sudo = machine['sudo']
+                sudo_bash = sudo_bash[machine['bash']]
+                sudo_bash(str(reset_pth), "")
 
 
 def create_local_files(args, helper, indent=''):
