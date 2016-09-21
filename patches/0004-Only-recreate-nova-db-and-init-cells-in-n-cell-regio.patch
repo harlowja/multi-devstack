@@ -1,4 +1,4 @@
-From f8986a77d6830ef42e154c66f1a8b69b13df32d4 Mon Sep 17 00:00:00 2001
+From 25813ca41c6ca8e1d819f0f521ee5401dc5b250f Mon Sep 17 00:00:00 2001
 From: Joshua Harlow <jxharlow@godaddy.com>
 Date: Tue, 20 Sep 2016 14:59:44 -0700
 Subject: [PATCH] Only recreate nova db and init cells in n-cell-region
@@ -9,7 +9,7 @@ Change-Id: Ief0c95bf0b857a1ab411735179236ec3b7d540cc
  1 file changed, 8 insertions(+), 5 deletions(-)
 
 diff --git a/lib/nova b/lib/nova
-index ac222ab..2cf0459 100644
+index ac222ab..2fd612a 100644
 --- a/lib/nova
 +++ b/lib/nova
 @@ -674,13 +674,13 @@ function create_nova_conf {
@@ -35,7 +35,7 @@ index ac222ab..2cf0459 100644
 -        $NOVA_BIN_DIR/nova-manage --config-file $NOVA_CELLS_CONF cell create --name=region --cell_type=parent --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=/ --woffset=0 --wscale=1
 -        $NOVA_BIN_DIR/nova-manage cell create --name=child --cell_type=child --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=child_cell --woffset=0 --wscale=1
 +        # Only do this on the top level cell
-+        if is_service_enabled n-cell-region; then
++        if is_cell_region; then
 +            $NOVA_BIN_DIR/nova-manage --config-file $NOVA_CELLS_CONF db sync
 +            $NOVA_BIN_DIR/nova-manage --config-file $NOVA_CELLS_CONF cell create --name=region --cell_type=parent --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=/ --woffset=0 --wscale=1
 +            $NOVA_BIN_DIR/nova-manage cell create --name=child --cell_type=child --username=$RABBIT_USERID --hostname=$RABBIT_HOST --port=5672 --password=$RABBIT_PASSWORD --virtual_host=child_cell --woffset=0 --wscale=1
