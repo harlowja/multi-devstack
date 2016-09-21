@@ -59,6 +59,15 @@ STACK_SOURCE = 'git://git.openstack.org/openstack-dev/devstack'
 LOG = logging.getLogger(__name__)
 
 
+def bake_func_name(func):
+    func_mod = func.__module__
+    try:
+        func_name = func.__qualname__
+    except AttributeError:
+        func_name = func.__name__
+    return ":".join([func_mod, func_name])
+
+
 class Helper(object):
     """Conglomerate of things for our to-be/in-progress cloud."""
 
@@ -134,7 +143,7 @@ class Helper(object):
 
     def run_func_and_track(self, func, indent='', on_prior=None):
         func_details = getattr(func, '__doc__', '')
-        func_name = ":".join([func.__module__, func.__name__])
+        func_name = bake_func_name(func)
         print("%sActivating function '%s'" % (indent, func_name))
         if func_details:
             print("%sDetails: '%s'" % (indent, func_details))
@@ -705,6 +714,14 @@ def create_topo(args, cloud, tracker):
 
 def reconcile_servers(args, cloud, tracker,
                       existing_servers, new_servers):
+    def is_still_valid(server):
+        record = tracker.get(server.name)
+        if not record:
+            return True
+        if STACK_SH in record.cmds:
+            # If it already ran, then we likely can't recover this node.
+            return False
+        return True
     # If old servers existed, and new servers were created/added, then
     # we need to figure out what to do about the old servers here, since
     # typically they will not just work with any new servers...
@@ -714,7 +731,7 @@ def reconcile_servers(args, cloud, tracker,
         return False
     kill_servers = []
     for server in existing_servers:
-        if server.name in tracker:
+        if not is_still_valid(server):
             kill_servers.append(server)
     if kill_servers:
         print("Performing reconciliation,"
@@ -723,13 +740,18 @@ def reconcile_servers(args, cloud, tracker,
             with utils.Spinner("  Destroying"
                                " server %s" % server.name, args.verbose):
                 cloud.delete_server(server.name, wait=True)
-            tracker.pop(server.name)
+                tracker.pop(server.name)
+        # We can no longer depend on funcs previously ran
+        # being accurate, so destroy them...
+        tracker.pop("funcs", None)
+        tracker.sync()
+        return True
+    else:
+        if new_servers:
             # We can no longer depend on funcs previously ran
             # being accurate, so destroy them...
             tracker.pop("funcs", None)
             tracker.sync()
-        return True
-    else:
         return False
 
 
