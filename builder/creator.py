@@ -622,6 +622,7 @@ def spawn_topo(args, cloud, tracker,
     ud = ud_tpl.render(**ud_params)
     topo = tracker.get("topo", {})
     pretty_topo = {}
+    valid_names = set()
     print("Spawning the following instances:")
     for kind in make_topo.keys():
         if kind == Roles.HV:
@@ -629,6 +630,7 @@ def spawn_topo(args, cloud, tracker,
         else:
             names = [make_topo[kind]]
         for name in names:
+            valid_names.add(name)
             if name not in topo:
                 az = az_selector()
                 instance = munch.Munch({
@@ -652,6 +654,15 @@ def spawn_topo(args, cloud, tracker,
                 'availability_zone': instance.availability_zone,
                 'kind': instance.kind.name,
             }
+    destroy_names = set()
+    for name in topo.keys():
+        if name not in valid_names:
+            destroy_names.add(name)
+    while destroy_names:
+        name = destroy_names.pop()
+        topo.pop(name)
+    tracker['topo'] = topo
+    tracker.sync()
     for line in pprint.pformat(pretty_topo).splitlines():
         print("  " + line)
     return topo
