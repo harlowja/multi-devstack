@@ -25,8 +25,6 @@ LOG_COLOR=False
 ENABLE_DEBUG_LOG_LEVEL=true
 
 GIT_BASE=${GIT_BASE:-https://git.openstack.org}
-
-# Screen console logs will capture service logs.
 SYSLOG=False
-SCREEN_LOGDIR=/opt/stack/logs
+USE_SCREEN=False
 LOG_COLOR=False
