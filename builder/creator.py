@@ -56,7 +56,6 @@ DEF_TOPO = {
     'control': {},
     'compute': [],
 }
-HV_NAME_TPL = '%(user)s-hv-%(rand)s'
 STACK_SH = '/home/%s/devstack/stack.sh' % DEF_USER
 STACK_SOURCE = 'git://git.openstack.org/openstack-dev/devstack'
 LOG = logging.getLogger(__name__)
