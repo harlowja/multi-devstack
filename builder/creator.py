@@ -46,12 +46,14 @@ DEF_FLAVORS = {
     Roles.HV: 'm1.large',
 }
 DEF_TOPO = {
-    Roles.CAP: '%(user)s-cap-%(rand)s',
-    Roles.MAP: '%(user)s-map-%(rand)s',
-    Roles.DB: '%(user)s-db-%(rand)s',
-    Roles.RB: '%(user)s-rb-%(rand)s',
-    # Does not include hvs, those get added dynamically at runtime.
-    Roles.HV: [],
+    'templates':  {
+        Roles.CAP: '%(user)s-cap-%(rand)s',
+        Roles.MAP: '%(user)s-map-%(rand)s',
+        Roles.DB: '%(user)s-db-%(rand)s',
+        Roles.RB: '%(user)s-rb-%(rand)s',
+        Roles.HV: '%(user)s-hv-%(rand)s',
+    },
+    'instances': {},
 }
 HV_NAME_TPL = '%(user)s-hv-%(rand)s'
 STACK_SH = '/home/%s/devstack/stack.sh' % DEF_USER
@@ -610,9 +612,9 @@ def bind_hostnames(args, helper, indent=''):
         print("%s%s => %s" % (indent, server.name, hostname))
 
 
-def spawn_topo(args, cloud, tracker,
-               make_topo, az_selector, flavors,
-               image):
+def fill_topo(args, cloud, tracker,
+              topo, az_selector, flavors,
+              image):
     ud_params = {
         'USER': DEF_USER,
         'USER_PW': DEF_PW,
@@ -620,49 +622,32 @@ def spawn_topo(args, cloud, tracker,
     }
     ud_tpl = args.template_fetcher("ud.tpl")
     ud = ud_tpl.render(**ud_params)
-    topo = tracker.get("topo", {})
     pretty_topo = {}
-    valid_names = set()
-    print("Spawning the following instances:")
-    for kind in make_topo.keys():
+    all_instances = topo['instances']
+    for kind in all_instances.keys():
         if kind == Roles.HV:
-            names = list(make_topo[kind])
+            instances = all_instances[kind]
         else:
-            names = [make_topo[kind]]
-        for name in names:
-            valid_names.add(name)
-            if name not in topo:
-                az = az_selector()
-                instance = munch.Munch({
-                    'name': name,
-                    'flavor': flavors[kind],
-                    'image': image,
-                    'availability_zone': az,
-                    'userdata': ud,
-                    'kind': kind,
-                })
-                topo[name] = instance
+            instances = [all_instances[kind]]
+        for instance in instances:
+            if not instance.filled:
+                instance.flavor = flavors[kind]
+                instance.image = image
+                instance.availability_zone = az_selector()
+                instance.userdata = ud
+                instance.kind = kind
+                instance.filled = True
                 tracker['topo'] = topo
                 tracker.sync()
-            else:
-                instance = topo[name]
             # This is just for visuals...
-            pretty_topo[name] = {
+            pretty_topo[instance.name] = {
                 'name': instance.name,
                 'flavor': instance.flavor.name,
                 'image': instance.image.name,
                 'availability_zone': instance.availability_zone,
                 'kind': instance.kind.name,
             }
-    destroy_names = set()
-    for name in topo.keys():
-        if name not in valid_names:
-            destroy_names.add(name)
-    while destroy_names:
-        name = destroy_names.pop()
-        topo.pop(name)
-    tracker['topo'] = topo
-    tracker.sync()
+    print("Fullfilling the following instances:")
     for line in pprint.pformat(pretty_topo).splitlines():
         print("  " + line)
     return topo
@@ -692,38 +677,31 @@ def wait_servers(args, cloud, tracker, servers):
 
 
 def create_topo(args, cloud, tracker):
-    make_topo = tracker.get("make_topo")
-    if not make_topo:
-        make_topo = copy.deepcopy(DEF_TOPO)
-        for _i in xrange(0, args.hypervisors):
-            name = HV_NAME_TPL % {
-                'user': cloud.auth['username'],
-                'rand': random.randrange(1, 99),
-            }
-            make_topo[Roles.HV].append(name)
-        for r in Roles:
-            if r != Roles.HV:
-                name_tpl = make_topo[r]
+    topo = tracker.get("topo")
+    if not topo:
+        topo = copy.deepcopy(DEF_TOPO)
+    hvs = topo['instances'].get(Roles.HV, [])
+    while len(hvs) < args.hypervisors:
+        hv_tpl = topo['templates'][Roles.HV]
+        name = hv_tpl % {
+            'user': cloud.auth['username'],
+            'rand': random.randrange(1, 99),
+        }
+        instance = munch.Munch(name=name, filled=False)
+        hvs.append(instance)
+    topo['instances'][Roles.HV] = hvs[0:args.hypervisors]
+    for r in Roles:
+        if r != Roles.HV:
+            if r not in topo['instances']:
+                name_tpl = topo['templates'][r]
                 name = name_tpl % {
                     'user': cloud.auth['username'],
                     'rand': random.randrange(1, 99),
                 }
-                make_topo[r] = name
-        tracker["make_topo"] = make_topo
-        tracker.sync()
-    else:
-        # If we need to alter the number of hypervisors, do so now...
-        hvs = make_topo[Roles.HV]
-        while len(hvs) < args.hypervisors:
-            name = HV_NAME_TPL % {
-                'user': cloud.auth['username'],
-                'rand': random.randrange(1, 99),
-            }
-            hvs.append(name)
-        make_topo[Roles.HV] = hvs[0:args.hypervisors]
-        tracker["make_topo"] = make_topo
-        tracker.sync()
-    return make_topo
+                topo['instances'][r] = munch.Munch(name=name, filled=False)
+    tracker["topo"] = topo
+    tracker.sync()
+    return topo
 
 
 def reconcile_servers(args, cloud, tracker,
@@ -777,15 +755,21 @@ def bake_servers(args, cloud, tracker, topo):
     found = []
     existing_servers = []
     maybe_servers = tracker.get("maybe_servers", set())
-    for instance in topo.values():
-        try:
-            server = all_servers[instance.name]
-        except KeyError:
-            missing.append(instance)
+    all_instances = topo['instances']
+    for kind in all_instances.keys():
+        if kind == Roles.HV:
+            instances = all_instances[kind]
         else:
-            found.append(instance)
-            server.kind = instance.kind
-            existing_servers.append(server)
+            instances = [all_instances[kind]]
+        for instance in instances:
+            try:
+                server = all_servers[instance.name]
+            except KeyError:
+                missing.append(instance)
+            else:
+                found.append(instance)
+                server.kind = instance.kind
+                existing_servers.append(server)
     if found:
         print("  Found:")
         for instance in found:
@@ -892,9 +876,9 @@ def create(args, cloud, tracker):
                                    " matching flavor '%s'" % (kind, kind_flv))
             flavors[kind] = flv
     # Create our topology and turn it into real servers...
-    topo = spawn_topo(args, cloud, tracker,
-                      create_topo(args, cloud, tracker), az_selector,
-                      flavors, image)
+    topo = fill_topo(args, cloud, tracker,
+                     create_topo(args, cloud, tracker), az_selector,
+                     flavors, image)
     existing_servers, new_servers = bake_servers(args, cloud, tracker, topo)
     new_server_names = set(server.name for server in new_servers)
     needs_rebuild = reconcile_servers(args, cloud, tracker,
