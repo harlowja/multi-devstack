@@ -643,23 +643,30 @@ def fill_topo(args, cloud, tracker,
     pretty_topo = {}
     compute = topo['compute']
     control = topo['control']
-    for instance in itertools.chain(compute, list(control.values())):
-        if not instance.filled:
-            instance.flavor = flavors[instance.kind]
-            instance.image = image
-            instance.availability_zone = az_selector()
-            instance.userdata = ud
-            instance.filled = True
-            tracker['topo'] = topo
-            tracker.sync()
-        # This is just for visuals...
-        pretty_topo[instance.name] = {
-            'name': instance.name,
-            'flavor': instance.flavor.name,
-            'image': instance.image.name,
-            'availability_zone': instance.availability_zone,
-            'kind': instance.kind.name,
-        }
+    filled_am = 0
+    for plane, instances in [('compute', topo['compute']),
+                             ('control', list(topo['control'].values()))]:
+        pretty_topo[plane] = {}
+        for instance in instances:
+            if not instance.filled:
+                instance.flavor = flavors[instance.kind]
+                instance.image = image
+                instance.availability_zone = az_selector()
+                instance.userdata = ud
+                instance.filled = True
+                filled_am += 1
+            # This is just for visuals...
+            pretty_topo[plane][instance.name] = {
+                'name': instance.name,
+                'flavor': instance.flavor.name,
+                'image': instance.image.name,
+                'availability_zone': instance.availability_zone,
+                'kind': instance.kind.name,
+            }
+    # Save whatever we did...
+    if filled_am:
+        tracker['topo'] = topo
+        tracker.sync()
     print("Topology (expanded):")
     for line in pprint.pformat(pretty_topo).splitlines():
         print("  " + line)
