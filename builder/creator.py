@@ -698,7 +698,7 @@ def create_topo(args, cloud, tracker):
             'user': cloud.auth['username'],
             'rand': random.randrange(1, 99),
         }
-        hvs.append(munch.Munch(name=name, filled=False, cmds=[],
+        hvs.append(munch.Munch(name=name, filled=False, cmds={},
                                kind=Roles.HV, builder_state=None))
     topo['compute'] = hvs
     for r in Roles:
@@ -711,7 +711,7 @@ def create_topo(args, cloud, tracker):
                 }
                 topo['control'][r] = munch.Munch(name=name, filled=False,
                                                  kind=r, builder_state=None,
-                                                 cmds=[])
+                                                 cmds={})
     tracker["topo"] = topo
     tracker.sync()
     return topo
@@ -786,7 +786,7 @@ def bake_servers(args, cloud, tracker, topo):
                 # may have been from the prior servers....
                 master_server.builder_state = None
                 master_server.ip = None
-                master_server.cmds = []
+                master_server.cmds.clear()
     else:
         print("  Spawning none.")
     tracker["topo"] = topo
