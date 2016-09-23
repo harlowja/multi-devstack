@@ -63,6 +63,11 @@ SERVER_RETAIN_KEYS = tuple([
     'name',
     'builder_state',
     'filled',
+    'cmds',
+    'image',
+    'flavor',
+    'availability_zone',
+    'userdata',
 ])
 LOG = logging.getLogger(__name__)
 
@@ -314,6 +319,13 @@ def make_az_selector(azs):
                 return random.choice(p)
 
     return az_selector
+
+
+def merge_servers(master_server, server):
+    """Merges new server data into master server (minus certain keys)."""
+    for k in server.keys():
+        if k not in SERVER_RETAIN_KEYS:
+            master_server[k] = server[k]
 
 
 def setup_git(args, helper, indent=''):
@@ -663,18 +675,16 @@ def wait_servers(args, cloud, tracker, servers):
         return None
     # Wait for them to actually become active...
     print("Waiting for instances to enter ACTIVE state.")
-    for i, server in enumerate(servers):
+    for server in servers:
         with utils.Spinner("  Waiting for %s" % server.name, args.verbose):
             if server.status != 'ACTIVE':
-                tmp_server = cloud.wait_for_server(server, auto_ip=False)
-                tmp_server.kind = server.kind
-                server = tmp_server
+                a_server = cloud.wait_for_server(server, auto_ip=False)
+                merge_servers(server, a_server)
         server_ip = get_server_ip(server)
         if not server_ip:
             raise RuntimeError("Instance %s spawned but no ip"
                                " was found associated" % server.name)
         server.ip = server_ip
-        servers[i] = server
 
 
 def create_topo(args, cloud, tracker):
@@ -688,7 +698,7 @@ def create_topo(args, cloud, tracker):
             'user': cloud.auth['username'],
             'rand': random.randrange(1, 99),
         }
-        hvs.append(munch.Munch(name=name, filled=False,
+        hvs.append(munch.Munch(name=name, filled=False, cmds=[],
                                kind=Roles.HV, builder_state=None))
     topo['compute'] = hvs
     for r in Roles:
@@ -700,7 +710,8 @@ def create_topo(args, cloud, tracker):
                     'rand': random.randrange(1, 99),
                 }
                 topo['control'][r] = munch.Munch(name=name, filled=False,
-                                                 kind=r, builder_state=None)
+                                                 kind=r, builder_state=None,
+                                                 cmds=[])
     tracker["topo"] = topo
     tracker.sync()
     return topo
@@ -708,51 +719,13 @@ def create_topo(args, cloud, tracker):
 
 def reconcile_servers(args, cloud, tracker,
                       existing_servers, new_servers):
-    def is_still_valid(server):
-        record = tracker.get(server.name)
-        if not record:
-            return True
-        if STACK_SH in record.cmds:
-            # If it already ran, then we likely can't recover this node.
-            return False
-        return True
     # If old servers existed, and new servers were created/added, then
-    # we need to figure out what to do about the old servers here, since
-    # typically they will not just work with any new servers...
-    if not existing_servers:
-        return False
-    if not new_servers:
-        return False
-    hv_servers = sum(1 for s in new_servers if s.kind == Roles.HV)
-    if new_servers and hv_servers == len(new_servers):
-        # These should be fine as they are, and ideally can be
-        # added in dynamically without affecting the larger cluster.
-        kill_servers = []
-    else:
-        kill_servers = []
-        for server in existing_servers:
-            if not is_still_valid(server):
-                kill_servers.append(server)
-    if kill_servers:
-        print("Performing reconciliation,"
-              " destroying %s existing servers." % (len(kill_servers)))
-        for server in kill_servers:
-            with utils.Spinner("  Destroying"
-                               " server %s" % server.name, args.verbose):
-                cloud.delete_server(server.name, wait=True)
-                tracker.pop(server.name)
+    # we need to figure out what to do about the old servers here....
+    if new_servers:
         # We can no longer depend on funcs previously ran
         # being accurate, so destroy them...
         tracker.pop("funcs", None)
         tracker.sync()
-        return True
-    else:
-        if new_servers:
-            # We can no longer depend on funcs previously ran
-            # being accurate, so destroy them...
-            tracker.pop("funcs", None)
-            tracker.sync()
-        return False
 
 
 def bake_servers(args, cloud, tracker, topo):
@@ -761,22 +734,17 @@ def bake_servers(args, cloud, tracker, topo):
                            for server in cloud.list_servers())
     missing_servers = []
     existing_servers = []
-    maybe_servers = tracker.get("maybe_servers", set())
     compute = topo['compute']
     control = topo['control']
-    for a_server in itertools.chain(compute, list(control.values())):
+    for master_server in itertools.chain(compute, list(control.values())):
         try:
-            server = all_servers[a_server.name]
+            server = all_servers[master_server.name]
         except KeyError:
-            missing_servers.append(a_server)
+            missing_servers.append(master_server)
         else:
-            existing_servers.append(a_server)
-            for k in server.keys():
-                if k not in SERVER_RETAIN_KEYS:
-                    a_server[k] = server[k]
-            a_server.ip = None
-            tracker["topo"] = topo
-            tracker.sync()
+            merge_servers(master_server, server)
+            existing_servers.append(master_server)
+            master_server.ip = None
     if existing_servers:
         print("  Found:")
         for server in existing_servers:
@@ -798,31 +766,31 @@ def bake_servers(args, cloud, tracker, topo):
             }
             meta = meta_tpl.render(**meta_params)
             meta = json.loads(meta)
+        maybe_servers = tracker.get("maybe_servers", set())
         with utils.Spinner("  Spawning", args.verbose):
-            for a_server in missing_servers:
+            for master_server in missing_servers:
                 # Save this so that if we kill the program
                 # before we save that we don't lose booted instances...
-                maybe_servers.add(a_server.name)
+                maybe_servers.add(master_server.name)
                 tracker['maybe_servers'] = maybe_servers
                 tracker.sync()
                 server = cloud.create_server(
-                    a_server.name, a_server.image,
-                    a_server.flavor, auto_ip=False,
+                    master_server.name, master_server.image,
+                    master_server.flavor, auto_ip=False,
                     key_name=args.key_name,
-                    availability_zone=a_server.availability_zone,
-                    meta=meta, userdata=a_server.userdata,
+                    availability_zone=master_server.availability_zone,
+                    meta=meta, userdata=master_server.userdata,
                     wait=False)
-                for k in server.keys():
-                    if k not in SERVER_RETAIN_KEYS:
-                        a_server[k] = server[k]
+                merge_servers(master_server, server)
                 # This is new so clear out whatever existing state there
-                # may have been from the prior instance....
-                a_server.builder_state = None
-                a_server.ip = None
-                tracker["topo"] = topo
-                tracker.sync()
+                # may have been from the prior servers....
+                master_server.builder_state = None
+                master_server.ip = None
+                master_server.cmds = []
     else:
         print("  Spawning none.")
+    tracker["topo"] = topo
+    tracker.sync()
     new_servers = missing_servers
     return existing_servers, new_servers
 
@@ -892,35 +860,15 @@ def create(args, cloud, tracker):
                      create_topo(args, cloud, tracker), az_selector,
                      flavors, image)
     existing_servers, new_servers = bake_servers(args, cloud, tracker, topo)
-    new_server_names = set(server.name for server in new_servers)
-    needs_rebuild = reconcile_servers(args, cloud, tracker,
-                                      existing_servers, new_servers)
-    while needs_rebuild:
-        existing_servers, new_servers = bake_servers(args, cloud,
-                                                     tracker, topo)
-        # Shift over already previously created new servers into the
-        # new servers category (and out of the existing servers)
-        # category.
-        new_server_names.update(server.name for server in new_servers)
-        tmp_existing_servers = []
-        for server in existing_servers:
-            if server.name in new_server_names:
-                new_servers.append(server)
-            else:
-                tmp_existing_servers.append(server)
-        existing_servers = tmp_existing_servers
-        needs_rebuild = reconcile_servers(args, cloud, tracker,
-                                          existing_servers, new_servers)
-    servers = existing_servers
+    reconcile_servers(args, cloud, tracker, existing_servers, new_servers)
+    servers = list(existing_servers)
     servers.extend(new_servers)
-    # Add records for all servers (new or old).
-    for server in servers:
-        record = munch.Munch({'cmds': {}})
-        tracker.setdefault(server.name, record)
-        tracker.sync()
     # Add records for funcs (if not already there).
-    tracker.setdefault('funcs', {})
-    tracker.sync()
+    try:
+        tracker['funcs']
+    except KeyError:
+        tracker['funcs'] = {}
+        tracker.sync()
     wait_servers(args, cloud, tracker, servers)
     # Now turn those servers into something useful...
     max_workers = min(args.max_workers, len(servers))
