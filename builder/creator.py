@@ -641,8 +641,6 @@ def fill_topo(args, cloud, tracker,
     ud_tpl = args.template_fetcher("ud.tpl")
     ud = ud_tpl.render(**ud_params)
     pretty_topo = {}
-    compute = topo['compute']
-    control = topo['control']
     filled_am = 0
     for plane, instances in [('compute', topo['compute']),
                              ('control', list(topo['control'].values()))]:
