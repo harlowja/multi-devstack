@@ -707,7 +707,7 @@ def create_topo(args, cloud, tracker):
         }
         hvs.append(munch.Munch(name=name, filled=False, cmds={},
                                kind=Roles.HV, builder_state=None))
-    topo['compute'] = hvs
+    topo['compute'] = hvs[0:args.hypervisors]
     for r in Roles:
         if r != Roles.HV:
             if r not in topo['control']:
