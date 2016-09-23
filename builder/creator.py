@@ -58,6 +58,12 @@ DEF_TOPO = {
 }
 STACK_SH = '/home/%s/devstack/stack.sh' % DEF_USER
 STACK_SOURCE = 'git://git.openstack.org/openstack-dev/devstack'
+SERVER_RETAIN_KEYS = tuple([
+    'kind',
+    'name',
+    'builder_state',
+    'filled',
+])
 LOG = logging.getLogger(__name__)
 
 
@@ -682,7 +688,8 @@ def create_topo(args, cloud, tracker):
             'user': cloud.auth['username'],
             'rand': random.randrange(1, 99),
         }
-        hvs.append(munch.Munch(name=name, filled=False, kind=Roles.HV))
+        hvs.append(munch.Munch(name=name, filled=False,
+                               kind=Roles.HV, builder_state=None))
     topo['compute'] = hvs
     for r in Roles:
         if r != Roles.HV:
@@ -692,9 +699,8 @@ def create_topo(args, cloud, tracker):
                     'user': cloud.auth['username'],
                     'rand': random.randrange(1, 99),
                 }
-                topo['control'][r] = munch.Munch(name=name,
-                                                 filled=False,
-                                                 kind=r)
+                topo['control'][r] = munch.Munch(name=name, filled=False,
+                                                 kind=r, builder_state=None)
     tracker["topo"] = topo
     tracker.sync()
     return topo
@@ -753,33 +759,34 @@ def bake_servers(args, cloud, tracker, topo):
     with utils.Spinner("Fetching existing servers", args.verbose):
         all_servers = dict((server.name, server)
                            for server in cloud.list_servers())
-    missing = []
-    found = []
+    missing_servers = []
     existing_servers = []
     maybe_servers = tracker.get("maybe_servers", set())
     compute = topo['compute']
     control = topo['control']
-    for instance in itertools.chain(compute, list(control.values())):
+    for a_server in itertools.chain(compute, list(control.values())):
         try:
-            server = all_servers[instance.name]
+            server = all_servers[a_server.name]
         except KeyError:
-            missing.append(instance)
+            missing_servers.append(a_server)
         else:
-            found.append(instance)
-            server.kind = instance.kind
-            existing_servers.append(server)
-    if found:
+            existing_servers.append(a_server)
+            for k in server.keys():
+                if k not in SERVER_RETAIN_KEYS:
+                    a_server[k] = server[k]
+            a_server.ip = None
+            tracker["topo"] = topo
+            tracker.sync()
+    if existing_servers:
         print("  Found:")
-        for instance in found:
-            print("    - %s" % instance.name)
+        for server in existing_servers:
+            print("    - %s" % server.name)
     else:
         print("  Found none.")
-    new_names = []
-    new_servers = []
-    if missing:
+    if missing_servers:
         print("  Creating:")
-        for instance in missing:
-            print("    - %s" % instance.name)
+        for server in missing_servers:
+            print("    - %s" % server.name)
         try:
             meta_tpl = args.template_fetcher("md.tpl")
         except jinja2.TemplateNotFound:
@@ -792,24 +799,31 @@ def bake_servers(args, cloud, tracker, topo):
             meta = meta_tpl.render(**meta_params)
             meta = json.loads(meta)
         with utils.Spinner("  Spawning", args.verbose):
-            for instance in missing:
+            for a_server in missing_servers:
                 # Save this so that if we kill the program
                 # before we save that we don't lose booted instances...
-                maybe_servers.add(instance.name)
+                maybe_servers.add(a_server.name)
                 tracker['maybe_servers'] = maybe_servers
                 tracker.sync()
                 server = cloud.create_server(
-                    instance.name, instance.image,
-                    instance.flavor, auto_ip=False,
+                    a_server.name, a_server.image,
+                    a_server.flavor, auto_ip=False,
                     key_name=args.key_name,
-                    availability_zone=instance.availability_zone,
-                    meta=meta, userdata=instance.userdata,
+                    availability_zone=a_server.availability_zone,
+                    meta=meta, userdata=a_server.userdata,
                     wait=False)
-                server.kind = instance.kind
-                new_names.append(instance.name)
-                new_servers.append(server)
+                for k in server.keys():
+                    if k not in SERVER_RETAIN_KEYS:
+                        a_server[k] = server[k]
+                # This is new so clear out whatever existing state there
+                # may have been from the prior instance....
+                a_server.builder_state = None
+                a_server.ip = None
+                tracker["topo"] = topo
+                tracker.sync()
     else:
         print("  Spawning none.")
+    new_servers = missing_servers
     return existing_servers, new_servers
 
 
