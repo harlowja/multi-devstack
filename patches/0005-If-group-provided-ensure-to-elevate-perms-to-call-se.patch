@@ -1,0 +1,26 @@
+From 7ae75179963246c82f554c83efdaf35f6be53efc Mon Sep 17 00:00:00 2001
+From: Joshua Harlow <jxharlow@godaddy.com>
+Date: Thu, 22 Sep 2016 17:18:14 -0700
+Subject: [PATCH] If group provided ensure to elevate perms to call setgid
+
+Change-Id: If8e0f2beeec81c1f05326542c196638e10ea7825
+---
+ functions-common | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/functions-common b/functions-common
+index 04f7c0f..6e166c5 100644
+--- a/functions-common
++++ b/functions-common
+@@ -1347,7 +1347,7 @@ function _run_process {
+     # Run under ``setsid`` to force the process to become a session and group leader.
+     # The pid saved can be used with pkill -g to get the entire process group.
+     if [[ -n "$group" ]]; then
+-        setsid sg $group "$command" & echo $! >$SERVICE_DIR/$SCREEN_NAME/$service.pid
++        sudo setsid sg $group "$command" & echo $! >$SERVICE_DIR/$SCREEN_NAME/$service.pid
+     else
+         setsid $command & echo $! >$SERVICE_DIR/$SCREEN_NAME/$service.pid
+     fi
+-- 
+2.7.4 (Apple Git-66)
+
