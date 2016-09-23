@@ -717,10 +717,16 @@ def reconcile_servers(args, cloud, tracker,
         return False
     if not new_servers:
         return False
-    kill_servers = []
-    for server in existing_servers:
-        if not is_still_valid(server):
-            kill_servers.append(server)
+    hv_servers = sum(1 for s in new_servers if s.kind == Roles.HV)
+    if new_servers and hv_servers == len(new_servers):
+        # These should be fine as they are, and ideally can be
+        # added in dynamically without affecting the larger cluster.
+        kill_servers = []
+    else:
+        kill_servers = []
+        for server in existing_servers:
+            if not is_still_valid(server):
+                kill_servers.append(server)
     if kill_servers:
         print("Performing reconciliation,"
               " destroying %s existing servers." % (len(kill_servers)))
