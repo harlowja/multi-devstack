@@ -2,17 +2,20 @@ from __future__ import print_function
 
 import argparse
 import copy
+import functools
 import itertools
 import json
 import logging
 import multiprocessing
 import os
 import random
+import sys
 
 import contextlib2
 import futurist
 import jinja2
 import munch
+from oslo_utils import reflection
 import six
 
 import builder
@@ -63,35 +66,76 @@ SERVER_RETAIN_KEYS = tuple([
     'name',
     'builder_state',
     'filled',
-    'cmds',
     'image',
     'flavor',
     'availability_zone',
     'userdata',
 ])
 LOG = logging.getLogger(__name__)
-
-
-def bake_func_name(func):
-    func_mod = func.__module__
-    try:
-        func_name = func.__qualname__
-    except AttributeError:
-        func_name = func.__name__
-    return ":".join([func_mod, func_name])
+NO_STATE = -1
 
 
 class Helper(object):
     """Conglomerate of things for our to-be/in-progress cloud."""
 
-    def __init__(self, args, cloud, tracker, servers):
-        self.servers = tuple(servers)
+    def __init__(self, cloud, tracker, topo):
+        self.topo = topo
         self.machines = {}
         self.tracker = tracker
         self.cloud = cloud
         self._settings = None
-        self._args = args
         self._exit_stack = contextlib2.ExitStack()
+
+    def iter_servers(self):
+        compute_servers = self.topo['compute']
+        control_servers = list(self.topo['control'].values())
+        for server in itertools.chain(compute_servers, control_servers):
+            yield server
+
+    @property
+    def server_count(self):
+        return len(list(self.iter_servers()))
+
+    def maybe_run(self, pre_state, post_state,
+                  func, func_on_done=None, indent='',
+                  func_name=None, func_details='',
+                  server_ordering=None):
+        def key_func(item):
+            if not server_ordering:
+                return sys.maxint
+            try:
+                return server_ordering.index(item.kind)
+            except ValueError:
+                return sys.maxint
+        if not func_details:
+            func_details = getattr(func, '__doc__', '')
+        if not func_name:
+            func_name = reflection.get_callable_name(func)
+        print("%sActivating function '%s'" % (indent, func_name))
+        if func_details:
+            print("%sDetails: '%s'" % (indent, func_details))
+        applicable_servers = []
+        for server in self.iter_servers():
+            if server.builder_state < post_state:
+                applicable_servers.append(server)
+        applicable_servers = sorted(applicable_servers,
+                                    key=key_func)
+        last_result = None
+        for server in applicable_servers:
+            server.builder_state = pre_state
+            self.save_topo()
+            last_result = func(self, server,
+                               last_result=last_result,
+                               indent=indent + "  ")
+            server.builder_state = post_state
+            self.save_topo()
+        if func_on_done is not None and applicable_servers:
+            func_on_done(self, indent=indent + "  ")
+        print("%sFunction '%s' has finished." % (indent, func_name))
+
+    def save_topo(self):
+        self.tracker['topo'] = self.topo
+        self.tracker.sync()
 
     @property
     def settings(self):
@@ -111,90 +155,16 @@ class Helper(object):
             self._settings = settings
             return self._settings
 
-    def run_cmds_and_track(self, remote_cmds, servers,
-                           indent='', on_prior=None,
-                           verbose=True):
-        to_run_cmds = []
-        to_run_servers = []
-
-        def on_start(remote_cmd, index):
-            server = to_run_servers[index]
-            record = self.tracker[server.name]
-            record.cmds[remote_cmd.full_name] = munch.Munch(started=True,
-                                                            finished=False)
-            self.tracker[server.name] = record
-            self.tracker.sync()
-
-        def on_done(remote_cmd, index):
-            server = to_run_servers[index]
-            record = self.tracker[server.name]
-            last = record.cmds[remote_cmd.full_name]
-            last.finished = True
-            self.tracker[server.name] = record
-            self.tracker.sync()
-
-        for server, remote_cmd in itertools.izip(servers, remote_cmds):
-            record = self.tracker[server.name]
-            last = record.cmds.get(remote_cmd.full_name)
-            if last is not None:
-                if on_prior is not None:
-                    should_run = on_prior(server, remote_cmd, last)
-                else:
-                    should_run = False
-            else:
-                should_run = True
-            if should_run:
-                to_run_cmds.append(remote_cmd)
-                to_run_servers.append(server)
-
-        if to_run_cmds:
-            max_workers = min(self._args.max_workers, len(to_run_cmds))
-            utils.run_and_record(to_run_cmds, indent=indent,
-                                 max_workers=max_workers,
-                                 on_done=on_done, verbose=verbose,
-                                 on_start=on_start)
-
-    def run_func_and_track(self, func, indent='', on_prior=None):
-        func_details = getattr(func, '__doc__', '')
-        func_name = bake_func_name(func)
-        print("%sActivating function '%s'" % (indent, func_name))
-        if func_details:
-            print("%sDetails: '%s'" % (indent, func_details))
-        funcs = self.tracker['funcs']
-        last = funcs.get(func_name)
-        if last is not None:
-            if on_prior is not None and on_prior(last.result):
-                last = None
-        if last is None:
-            start = utils.now()
-            tmp_indent = indent + "  "
-            result = func(self._args, self, indent=tmp_indent)
-            end = utils.now()
-            elapsed = end - start
-            print("%sFunction '%s' has finished in"
-                  " %0.2f seconds" % (indent, func_name, elapsed))
-            last = munch.Munch(result=result,
-                               elapsed=elapsed,
-                               details=func_details)
-            funcs[func_name] = last
-            self.tracker['funcs'] = funcs
-            self.tracker.sync()
-            return last.result
-        else:
-            print("%sFunction '%s' was previously finished." % (indent,
-                                                                func_name))
-            return last.result
-
     def iter_server_by_kind(self, kind):
-        for server in self.servers:
+        for server in self.iter_servers():
             if server.kind == kind:
                 yield server
 
     def __enter__(self):
         return self
 
-    def match_machine(self, server_name, machine):
-        matched_servers = [server for server in self.servers
+    def bind_machine(self, server_name, machine):
+        matched_servers = [server for server in self.iter_servers()
                            if server.name == server_name]
         if not matched_servers:
             raise RuntimeError("Can not match ssh machine"
@@ -328,12 +298,15 @@ def merge_servers(master_server, server):
             master_server[k] = server[k]
 
 
-def setup_git(args, helper, indent=''):
-    """Performs initial git setup/config on the servers."""
-    for server in helper.servers:
-        machine = helper.machines[server.name]
-        machine['mkdir']("-p", ".git")
-        machine['touch'](".gitconfig")
+def setup_git(args, helper, server, indent='', last_result=None):
+    """Performs initial git setup/config on a server."""
+    machine = helper.machines[server.name]
+    git_path = machine.path(".git")
+    if not git_path.is_dir():
+        git_path.mkdir()
+    git_config_path = machine.path(".gitconfig")
+    if not git_config_path.is_file():
+        git_config_path.touch()
         git = machine['git']
         creator = helper.cloud.auth['username']
         git("config", "--global", "user.email",
@@ -341,293 +314,211 @@ def setup_git(args, helper, indent=''):
         git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
 
 
-def create_overlay(args, helper, indent=''):
+def create_overlay(helper, server, indent='', last_result=None):
     """Sets up overlay network (allows for future VM connectivity)."""
     pass
 
 
-def clone_devstack(args, helper, indent=''):
+def clone_devstack(args, helper, server, indent='', last_result=None):
     """Adjusts prior devstack and/or clones devstack + adjusts branch."""
-    print("%sCloning devstack:" % (indent))
-    print("%s  Branch: %s" % (indent, args.branch))
-    for server in helper.servers:
-        machine = helper.machines[server.name]
-        old_path = machine.path("devstack")
-        if not old_path.exists():
-            with utils.Spinner("%sCloning devstack"
-                               " in %s" % (indent, server.hostname),
-                               args.verbose):
-                git = machine['git']
-                git("clone", STACK_SOURCE, "devstack")
-                git('checkout', args.branch, cwd="devstack")
-        else:
-            with utils.Spinner("%sResetting devstack"
-                               " in %s" % (indent, server.hostname),
-                               args.verbose):
-                git = machine['git']
-                git("reset", "--hard", "HEAD", cwd='devstack')
-                git('checkout', args.branch, cwd="devstack")
+    machine = helper.machines[server.name]
+    old_path = machine.path("devstack")
+    if not old_path.exists():
+        with utils.Spinner("%sCloning devstack"
+                           " in %s" % (indent, server.hostname),
+                           args.verbose):
+            git = machine['git']
+            git("clone", STACK_SOURCE, "devstack")
+            git('checkout', args.branch, cwd="devstack")
+    else:
+        with utils.Spinner("%sResetting devstack"
+                           " in %s" % (indent, server.hostname),
+                           args.verbose):
+            git = machine['git']
+            git("reset", "--hard", "HEAD", cwd='devstack')
+            git('checkout', args.branch, cwd="devstack")
 
 
-def interconnect_ssh(args, helper, indent=''):
+def interconnect_ssh(args, helper, server, indent='', last_result=None):
     """Creates & copies each stack users ssh key to each other server."""
-    # First generate keys...
-    keys_to_server = {}
-    for server in helper.servers:
-        with utils.Spinner("%sGenerating ssh key for"
-                           " %s" % (indent, server.name), args.verbose):
-            machine = helper.machines[server.name]
-            ssh_dir = machine.path(".ssh")
-            if not ssh_dir.exists():
-                ssh_dir.mkdir()
-                ssh_dir.chmod(0o700)
-            # Clear off any old keys (unless already there).
-            found = 0
-            for base_key in ["id_rsa", "id_rsa.pub"]:
-                key_path = machine.path("~/.ssh/%s" % base_key)
-                if key_path.isfile():
-                    found += 1
-            if found < 2:
-                # Ok forcefully regenerate them...
+    if last_result is None:
+        keys_to_server = {}
+        for server in helper.iter_servers():
+            with utils.Spinner("%sFinding/generating ssh key(s) for"
+                               " %s" % (indent, server.name), args.verbose):
+                machine = helper.machines[server.name]
+                ssh_dir = machine.path(".ssh")
+                if not ssh_dir.exists():
+                    ssh_dir.mkdir()
+                    ssh_dir.chmod(0o700)
+                # Clear off any old keys (unless already there).
+                found = 0
                 for base_key in ["id_rsa", "id_rsa.pub"]:
                     key_path = machine.path("~/.ssh/%s" % base_key)
                     if key_path.isfile():
-                        key_path.delete()
-                found = 0
-            if not found:
-                key_gen = machine['ssh-keygen']
-                key_gen("-t", "rsa", "-f",
-                        "/home/%s/.ssh/id_rsa" % DEF_USER, "-N", "")
-            server_pub_key_path = machine.path(".ssh/id_rsa.pub")
-            keys_to_server[server.name] = server_pub_key_path.read().strip()
-    # Then distribute them.
-    with utils.Spinner("%s- Distributing public"
-                       " ssh keys" % indent, args.verbose):
-        for server in helper.servers:
-            contents = six.StringIO()
-            for server_name, pub_key in keys_to_server.items():
-                if server_name != server.name:
-                    contents.write(pub_key)
-                    contents.write("\n")
-            machine = helper.machines[server.name]
-            # Do this in 2 steps to avoid overwriting if we can't
-            # upload it (for whatever reason).
-            auth_keys_path = machine.path(".ssh/authorized_keys")
-            new_auth_keys_path = machine.path(".ssh/authorized_keys.new")
-            new_auth_keys_path.touch()
-            new_auth_keys_path.write(contents.getvalue())
-            new_auth_keys_path.chmod(0o600)
-            new_auth_keys_path.move(auth_keys_path)
-    # Then adjust known_hosts so no prompt occurs when connecting.
-    with utils.Spinner("%s- Adjusting known_hosts"
-                       " files" % indent, args.verbose):
-        for server in helper.servers:
-            machine = helper.machines[server.name]
-            key_scan = machine['ssh-keyscan']
-            known_hosts_path = machine.path(".ssh/known_hosts")
-            known_hosts_path.touch()
-            contents = six.StringIO()
-            for next_server in helper.servers:
-                if next_server is not server:
-                    stdout = key_scan("-t", "ssh-rsa",
-                                      next_server.hostname)
-                    contents.write(stdout.strip())
-                    contents.write("\n")
-            new_known_hosts_path = machine.path(".ssh/known_hosts.new")
-            new_known_hosts_path.touch()
-            new_known_hosts_path.write(contents.getvalue())
-            new_known_hosts_path.move(known_hosts_path)
+                        found += 1
+                if found < 2:
+                    # Ok forcefully regenerate them...
+                    for base_key in ["id_rsa", "id_rsa.pub"]:
+                        key_path = machine.path("~/.ssh/%s" % base_key)
+                        if key_path.isfile():
+                            key_path.delete()
+                    found = 0
+                if not found:
+                    key_gen = machine['ssh-keygen']
+                    key_gen("-t", "rsa", "-f",
+                            "/home/%s/.ssh/id_rsa" % DEF_USER, "-N", "")
+                server_pub_key_path = machine.path(".ssh/id_rsa.pub")
+                server_pub_key = server_pub_key_path.read()
+                keys_to_server[server.name] = server_pub_key.strip()
+    else:
+        keys_to_server = last_result
+    auth_key_contents = six.StringIO()
+    for server_name, pub_key in keys_to_server.items():
+        if server_name != server.name:
+            auth_key_contents.write(pub_key)
+            auth_key_contents.write("\n")
+    machine = helper.machines[server.name]
+    # Do this in 2 steps to avoid overwriting if we can't
+    # upload it (for whatever reason).
+    auth_keys_path = machine.path(".ssh/authorized_keys")
+    new_auth_keys_path = machine.path(".ssh/authorized_keys.new")
+    new_auth_keys_path.touch()
+    new_auth_keys_path.write(auth_key_contents.getvalue())
+    new_auth_keys_path.chmod(0o600)
+    new_auth_keys_path.move(auth_keys_path)
+    return keys_to_server
 
 
-def install_some_packages(args, helper, indent=''):
-    """Installs a few prerequisite packages on the various servers."""
-    remote_cmds = []
-    hvs = list(helper.iter_server_by_kind(Roles.HV))
-    maps = list(helper.iter_server_by_kind(Roles.MAP))
-    caps = list(helper.iter_server_by_kind(Roles.CAP))
-    for server in maps + caps + hvs:
-        machine = helper.machines[server.name]
-        sudo = machine['sudo']
-        yum = sudo[machine['yum']]
-        remote_cmds.append(
-            utils.RemoteCommand(
-                yum, "-y", "install",
-                # We need to get the mariadb package (the client) installed
-                # so that future runs of stack.sh which will not install the
-                # mariadb-server will be able to interact with the database,
-                #
-                # Otherwise it ends badly at stack.sh run-time... (maybe
-                # something we can fix in devstack?)
-                'mariadb',
-                scratch_dir=args.scratch_dir,
-                server=server))
-    if remote_cmds:
-        max_workers = min(len(remote_cmds), args.max_workers)
-        utils.run_and_record(remote_cmds,
-                             verbose=args.verbose, indent=indent,
-                             max_workers=max_workers)
-    for server in hvs:
-        machine = helper.machines[server.name]
-        sudo = machine['sudo']
-        yum = sudo[machine['yum']]
-        service = sudo[machine['service']]
-        utils.run_and_record([
-            utils.RemoteCommand(
-                yum, "-y", "install",
-                # This is mainly for the hypervisors, but installing it
-                # everywhere shouldn't hurt.
-                'openvswitch',
-                scratch_dir=args.scratch_dir,
-                server=server)
-        ], verbose=args.verbose, indent=indent)
-        service('openvswitch', 'restart')
+def install_some_packages(args, helper, server, indent='', last_result=None):
+    """Installs a few prerequisite packages on each server."""
+    machine = helper.machines[server.name]
+    sudo = machine['sudo']
+    yum = sudo[machine['yum']]
+    yum_install_cmd = utils.RemoteCommand(
+        yum, "-y", "install",
+        # We need to get the mariadb package (the client) installed
+        # so that future runs of stack.sh which will not install the
+        # mariadb-server will be able to interact with the database,
+        #
+        # Otherwise it ends badly at stack.sh run-time... (maybe
+        # something we can fix in devstack?)
+        'mariadb',
+        # This is wanted for our overlay (eventually),
+        'openvswitch',
+        scratch_dir=args.scratch_dir,
+        server=server)
+    utils.run_and_record([yum_install_cmd],
+                         verbose=args.verbose, indent=indent)
+    service = sudo[machine['service']]
+    service('openvswitch', 'restart')
 
 
-def upload_repos(args, helper, indent=''):
+def upload_repos(args, helper, server, indent='', last_result=None):
     """Uploads all repos.d files into corresponding repos.d directory."""
-    for server in helper.servers:
-        file_names = [file_name
-                      for file_name in os.listdir(args.repos)
-                      if file_name.endswith(".repo")]
-        if file_names:
-            machine = helper.machines[server.name]
-            with utils.Spinner("%sUploading %s repos.d file/s to"
-                               " %s" % (indent, len(file_names),
-                                        server.hostname), args.verbose):
-                for file_name in file_names:
-                    target_path = "/etc/yum.repos.d/%s" % (file_name)
-                    tpm_path = "/tmp/%s" % (file_name)
-                    local_path = os.path.join(args.repos, file_name)
-                    machine.upload(local_path, tpm_path)
-                    sudo = machine['sudo']
-                    mv = sudo[machine['mv']]
-                    mv(tpm_path, target_path)
-                    yum = sudo[machine['yum']]
-                    yum('clean', 'all')
+    file_names = [file_name
+                  for file_name in os.listdir(args.repos)
+                  if file_name.endswith(".repo")]
+    if file_names:
+        machine = helper.machines[server.name]
+        with utils.Spinner("%sUploading %s repos.d file/s to"
+                           " %s" % (indent, len(file_names),
+                                    server.hostname), args.verbose):
+            for file_name in file_names:
+                target_path = "/etc/yum.repos.d/%s" % (file_name)
+                tpm_path = "/tmp/%s" % (file_name)
+                local_path = os.path.join(args.repos, file_name)
+                machine.upload(local_path, tpm_path)
+                sudo = machine['sudo']
+                mv = sudo[machine['mv']]
+                mv(tpm_path, target_path)
+                yum = sudo[machine['yum']]
+                yum('clean', 'all')
 
 
-def patch_devstack(args, helper, indent=''):
+def patch_devstack(args, helper, server, indent='', last_result=None):
     """Applies local devstack patches to cloned devstack."""
-    for server in helper.servers:
-        file_names = [file_name
-                      for file_name in os.listdir(args.patches)
-                      if file_name.endswith(".patch")]
-        if file_names:
-            machine = helper.machines[server.name]
-            with utils.Spinner("%sUploading (and applying) %s patch file/s to"
-                               " %s" % (indent, len(file_names),
-                                        server.hostname), args.verbose):
-                for file_name in file_names:
-                    target_path = "/home/%s/devstack/%s" % (DEF_USER,
-                                                            file_name)
-                    local_path = os.path.join(args.patches, file_name)
-                    machine.upload(local_path, target_path)
-                    git = machine['git']
-                    git("am", file_name, cwd='devstack')
+    file_names = [file_name
+                  for file_name in os.listdir(args.patches)
+                  if file_name.endswith(".patch")]
+    if file_names:
+        machine = helper.machines[server.name]
+        with utils.Spinner("%sUploading (and applying) %s patch file/s to"
+                           " %s" % (indent, len(file_names),
+                                    server.hostname), args.verbose):
+            for file_name in file_names:
+                target_path = "/home/%s/devstack/%s" % (DEF_USER,
+                                                        file_name)
+                local_path = os.path.join(args.patches, file_name)
+                machine.upload(local_path, target_path)
+                git = machine['git']
+                git("am", file_name, cwd='devstack')
 
 
-def upload_extras(args, helper, indent=''):
+def upload_extras(args, helper, server, indent='', last_result=None):
     """Uploads all extras.d files into corresponding devstack directory."""
-    for server in helper.servers:
-        file_names = [file_name
-                      for file_name in os.listdir(args.extras)
-                      if file_name.endswith(".sh")]
-        if file_names:
-            machine = helper.machines[server.name]
-            with utils.Spinner("%sUploading %s extras.d file/s to"
-                               " %s" % (indent, len(file_names),
-                                        server.hostname), args.verbose):
-                for file_name in file_names:
-                    target_path = "/home/%s/devstack/extras.d/%s" % (DEF_USER,
-                                                                     file_name)
-                    local_path = os.path.join(args.extras, file_name)
-                    machine.upload(local_path, target_path)
+    file_names = [file_name
+                  for file_name in os.listdir(args.extras)
+                  if file_name.endswith(".sh")]
+    if file_names:
+        machine = helper.machines[server.name]
+        with utils.Spinner("%sUploading %s extras.d file/s to"
+                           " %s" % (indent, len(file_names),
+                                    server.hostname), args.verbose):
+            for file_name in file_names:
+                target_path = "/home/%s/devstack/extras.d/%s" % (DEF_USER,
+                                                                 file_name)
+                local_path = os.path.join(args.extras, file_name)
+                machine.upload(local_path, target_path)
 
 
-def run_stack(args, helper, indent=''):
-    """Activates stack.sh on the various servers (in the right order)."""
+def run_stack(args, helper, server, indent='', last_result=None):
+    """Activates stack.sh on all server (in the right order)."""
     stack_sh = STACK_SH
-
-    def on_prior(server, remote_cmd, last):
-        if last.started and not last.finished:
-            print("%sWARNING: Server %s already started running `%s` this"
-                  " may not end well as stack.sh is not"
-                  " idempotent..." % (indent, server.name, stack_sh))
-            return True
-        else:
-            return False
-
-    for group in [[Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV]]:
-        run_cmds = []
-        servers = []
-        for kind in group:
-            for server in helper.iter_server_by_kind(kind):
-                machine = helper.machines[server.name]
-                run_cmds.append(
-                    utils.RemoteCommand(machine[stack_sh],
-                                        scratch_dir=args.scratch_dir,
-                                        server=server))
-                servers.append(server)
-        if run_cmds:
-            helper.run_cmds_and_track(run_cmds, servers,
-                                      indent=indent + "  ",
-                                      verbose=args.verbose,
-                                      on_prior=on_prior)
-        if Roles.DB in group:
-            # Reset the database password to what it used to be...
-            tpl = args.template_fetcher("reset_mysql.tpl")
-            reset_sh = tpl.render()
-            for server in helper.iter_server_by_kind(Roles.DB):
-                machine = helper.machines[server.name]
-                with utils.Spinner("%sResetting mysql root password"
-                                   " %s" % (indent, server.hostname),
-                                   args.verbose):
-                    reset_pth = machine.path(
-                        "/home/%s/devstack/reset_mysql.sh" % DEF_USER)
-                    reset_pth.touch()
-                    reset_pth.write(reset_sh)
-                    sudo = machine['sudo']
-                    sudo_bash = sudo[machine['bash']]
-                    sudo_bash(str(reset_pth), "")
+    machine = helper.machines[server.name]
+    stack_cmd = utils.RemoteCommand(machine[stack_sh],
+                                    scratch_dir=args.scratch_dir,
+                                    server=server)
+    utils.run_and_record([stack_cmd],
+                         verbose=args.verbose, indent=indent)
 
 
-def create_local_files(args, helper, indent=''):
-    """Creates and uploads all local.conf files for devstack."""
-    params = helper.settings.copy()
+def create_local_files(args, helper, server, indent='', last_result=None):
+    """Creates and uploads local.conf files for devstack."""
     # This needs to be done so that servers that will not have rabbit
     # or the database on them (but need to access it will still have
     # access to them, or know how to get to them).
     rbs = list(helper.iter_server_by_kind(Roles.RB))
     dbs = list(helper.iter_server_by_kind(Roles.DB))
+    params = helper.settings.copy()
     params.update({
         'DATABASE_HOST': dbs[0].hostname,
         'RABBIT_HOST': rbs[0].hostname,
     })
     target_path = "/home/%s/devstack/local.conf" % DEF_USER
-    for server in helper.servers:
-        machine = helper.machines[server.name]
-        with utils.Spinner("%sUploading local.conf to"
-                           " %s" % (indent, server.hostname), args.verbose):
-            local_path = os.path.join(args.scratch_dir,
-                                      "local.%s.conf" % server.hostname)
-            tpl = args.template_fetcher(
-                "local.%s.tpl" % server.kind.name.lower())
-            tpl_contents = tpl.render(**params)
-            if not tpl_contents.endswith("\n"):
-                tpl_contents += "\n"
-            with utils.safe_open(local_path, 'wb') as o_fh:
-                o_fh.write(tpl_contents)
-            machine.upload(local_path, target_path)
+    machine = helper.machines[server.name]
+    with utils.Spinner("%sUploading local.conf to"
+                       " %s" % (indent, server.hostname), args.verbose):
+        local_path = os.path.join(args.scratch_dir,
+                                  "local.%s.conf" % server.hostname)
+        tpl = args.template_fetcher(
+            "local.%s.tpl" % server.kind.name.lower())
+        tpl_contents = tpl.render(**params)
+        if not tpl_contents.endswith("\n"):
+            tpl_contents += "\n"
+        with utils.safe_open(local_path, 'wb') as o_fh:
+            o_fh.write(tpl_contents)
+        machine.upload(local_path, target_path)
 
 
-def bind_hostnames(args, helper, indent=''):
-    """Attaches fully qualified hostnames to server objects."""
-    for server in helper.servers:
+def bind_hostname(helper, server, last_result=None, indent=''):
+    """Attaches fully qualified hostname to server object."""
+    if 'hostname' not in server:
         machine = helper.machines[server.name]
         hostname = machine['hostname']("-f")
         hostname = hostname.strip()
         server.hostname = hostname
-        print("%s%s => %s" % (indent, server.name, hostname))
+        helper.save_topo()
 
 
 def fill_topo(args, cloud, tracker,
@@ -703,8 +594,8 @@ def create_topo(args, cloud, tracker):
             'user': cloud.auth['username'],
             'rand': random.randrange(1, 99),
         }
-        hvs.append(munch.Munch(name=name, filled=False, cmds={},
-                               kind=Roles.HV, builder_state=None))
+        hvs.append(munch.Munch(name=name, filled=False,
+                               kind=Roles.HV, builder_state=NO_STATE))
     topo['compute'] = hvs[0:args.hypervisors]
     for r in Roles:
         if r != Roles.HV:
@@ -714,23 +605,12 @@ def create_topo(args, cloud, tracker):
                     'user': cloud.auth['username'],
                     'rand': random.randrange(1, 99),
                 }
-                topo['control'][r] = munch.Munch(name=name, filled=False,
-                                                 kind=r, builder_state=None,
-                                                 cmds={})
+                topo['control'][r] = munch.Munch(
+                    name=name, filled=False,
+                    kind=r, builder_state=NO_STATE)
     tracker["topo"] = topo
     tracker.sync()
     return topo
-
-
-def reconcile_servers(args, cloud, tracker,
-                      existing_servers, new_servers):
-    # If old servers existed, and new servers were created/added, then
-    # we need to figure out what to do about the old servers here....
-    if new_servers:
-        # We can no longer depend on funcs previously ran
-        # being accurate, so destroy them...
-        tracker.pop("funcs", None)
-        tracker.sync()
 
 
 def bake_servers(args, cloud, tracker, topo):
@@ -739,9 +619,8 @@ def bake_servers(args, cloud, tracker, topo):
                            for server in cloud.list_servers())
     missing_servers = []
     existing_servers = []
-    compute = topo['compute']
-    control = topo['control']
-    for master_server in itertools.chain(compute, list(control.values())):
+    for master_server in itertools.chain(topo['compute'],
+                                         list(topo['control'].values())):
         try:
             server = all_servers[master_server.name]
         except KeyError:
@@ -789,9 +668,8 @@ def bake_servers(args, cloud, tracker, topo):
                 merge_servers(master_server, server)
                 # This is new so clear out whatever existing state there
                 # may have been from the prior servers....
-                master_server.builder_state = None
+                master_server.builder_state = NO_STATE
                 master_server.ip = None
-                master_server.cmds.clear()
     else:
         print("  Spawning none.")
     tracker["topo"] = topo
@@ -800,19 +678,65 @@ def bake_servers(args, cloud, tracker, topo):
     return existing_servers, new_servers
 
 
-def transform(helper):
+def transform(args, helper):
     """Turn (mostly) raw servers into useful things."""
-    helper.run_func_and_track(bind_hostnames, on_prior=lambda result: True)
-    helper.run_func_and_track(interconnect_ssh)
-    helper.run_func_and_track(create_overlay)
-    helper.run_func_and_track(setup_git)
-    helper.run_func_and_track(upload_repos)
-    helper.run_func_and_track(install_some_packages)
-    helper.run_func_and_track(clone_devstack)
-    helper.run_func_and_track(patch_devstack)
-    helper.run_func_and_track(upload_extras)
-    helper.run_func_and_track(create_local_files)
-    helper.run_func_and_track(run_stack)
+
+    def on_done_show_hostnames(helper, indent=''):
+        for server in helper.iter_servers():
+            print("%s%s => %s" % (indent, server.name, server.hostname))
+
+    def on_done_adjust_known_hosts(helper, indent=''):
+        for server in helper.iter_servers():
+            machine = helper.machines[server.name]
+            key_scan = machine['ssh-keyscan']
+            contents = six.StringIO()
+            for other_server in helper.iter_servers():
+                if other_server is not server:
+                    stdout = key_scan("-t", "ssh-rsa", other_server.ip)
+                    contents.write(stdout.strip())
+                    contents.write("\n")
+            known_hosts_path = machine.path(".ssh/known_hosts")
+            known_hosts_path.touch()
+            new_known_hosts_path = machine.path(".ssh/known_hosts.new")
+            new_known_hosts_path.touch()
+            new_known_hosts_path.write(contents.getvalue())
+            new_known_hosts_path.move(known_hosts_path)
+        print("%sDelivered ssh-keys to %s servers" % (indent,
+                                                      helper.server_count))
+
+    # Mini-state/transition diagram + state identifiers (for resuming).
+    run_stack_server_ordering = [
+        Roles.RB, Roles.DB, Roles.MAP, Roles.CAP, Roles.HV,
+    ]
+    states = [
+        (0, 1, bind_hostname, on_done_show_hostnames, None),
+        (10, 11,
+         functools.partial(interconnect_ssh, args),
+         on_done_adjust_known_hosts, None),
+        (20, 21, functools.partial(setup_git, args), None, None),
+        (30, 31, functools.partial(upload_repos, args), None, None),
+        (40, 41, functools.partial(install_some_packages, args), None, None),
+        (50, 51, create_overlay, None, None),
+        (60, 61, functools.partial(clone_devstack, args), None, None),
+        (70, 71, functools.partial(patch_devstack, args), None, None),
+        (80, 81, functools.partial(upload_extras, args), None, None),
+        (90, 91, functools.partial(create_local_files, args), None, None),
+        (100, 101,
+         functools.partial(run_stack, args), None,
+         run_stack_server_ordering),
+    ]
+    for (pre_state, post_state, func,
+         func_on_done, server_ordering) in states:
+        func_details = None
+        func_name = None
+        if isinstance(func, functools.partial):
+            func_details = func.func.__doc__
+            func_name = reflection.get_callable_name(func.func)
+        helper.maybe_run(pre_state, post_state, func,
+                         func_on_done=func_on_done,
+                         func_details=func_details,
+                         func_name=func_name,
+                         server_ordering=server_ordering)
 
 
 def create(args, cloud, tracker):
@@ -865,25 +789,17 @@ def create(args, cloud, tracker):
                      create_topo(args, cloud, tracker), az_selector,
                      flavors, image)
     existing_servers, new_servers = bake_servers(args, cloud, tracker, topo)
-    reconcile_servers(args, cloud, tracker, existing_servers, new_servers)
-    servers = list(existing_servers)
-    servers.extend(new_servers)
-    # Add records for funcs (if not already there).
-    try:
-        tracker['funcs']
-    except KeyError:
-        tracker['funcs'] = {}
-        tracker.sync()
-    wait_servers(args, cloud, tracker, servers)
+    wait_servers(args, cloud, tracker, existing_servers + new_servers)
     # Now turn those servers into something useful...
-    max_workers = min(args.max_workers, len(servers))
-    with Helper(args, cloud, tracker, servers) as helper:
+    max_workers = min(args.max_workers,
+                      len(existing_servers) + len(new_servers))
+    with Helper(cloud, tracker, topo) as helper:
         futs = []
         with utils.Spinner("Validating ssh connectivity"
                            " using %s threads" % (max_workers),
                            args.verbose):
             with futurist.ThreadPoolExecutor(max_workers=max_workers) as ex:
-                for server in servers:
+                for server in helper.iter_servers():
                     fut = ex.submit(utils.ssh_connect,
                                     server.ip, indent="  ",
                                     user=DEF_USER, password=DEF_PW,
@@ -891,6 +807,6 @@ def create(args, cloud, tracker):
                                     verbose=args.verbose)
                     futs.append((fut, server))
         for fut, server in futs:
-            helper.match_machine(server.name, fut.result())
+            helper.bind_machine(server.name, fut.result())
         # And they said, turn it into a cloud...
-        transform(helper)
+        transform(args, helper)
