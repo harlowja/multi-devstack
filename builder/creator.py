@@ -14,6 +14,7 @@ import futurist
 import jinja2
 import munch
 from oslo_utils import reflection
+import plumbum
 import six
 
 import builder
@@ -260,18 +261,29 @@ def merge_servers(master_server, server):
 def setup_git(args, helper, server, indent='', last_result=None):
     """Performs initial git setup/config on a server."""
     machine = helper.machines[server.name]
+    creator = helper.cloud.auth['username']
     git_path = machine.path(".git")
     if not git_path.is_dir():
         git_path.mkdir()
     git_config_path = machine.path(".gitconfig")
     if not git_config_path.is_file():
         git_config_path.touch()
-    # TODO(harlowja): only set this if not already set??
-    creator = helper.cloud.auth['username']
     git = machine['git']
-    git("config", "--global", "user.email",
-        "%s@%s.com" % (creator, creator))
-    git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
+    try:
+        user_email = git("config", "--global", "--get", 'user.email')
+        user_email = user_email.strip()
+    except plumbum.ProcessExecutionError:
+        user_email = None
+    if not user_email:
+        git("config", "--global", "user.email",
+            "%s@%s.com" % (creator, creator))
+    try:
+        user_name = git("config", "--global", "--get", 'user.name')
+        user_name = user_name.strip()
+    except plumbum.ProcessExecutionError:
+        user_name = None
+    if not user_name:
+        git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
 
 
 def run_stack(args, helper, indent=""):
