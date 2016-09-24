@@ -534,7 +534,7 @@ def fill_topo(args, cloud, tracker,
         pretty_topo[plane] = {}
         for server in servers:
             if not server.filled:
-                server.flavor = flavors[instance.kind]
+                server.flavor = flavors[server.kind]
                 server.image = image
                 server.availability_zone = az_selector()
                 server.userdata = ud
