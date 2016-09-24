@@ -529,24 +529,24 @@ def fill_topo(args, cloud, tracker,
     ud = ud_tpl.render(**ud_params)
     pretty_topo = {}
     filled_am = 0
-    for plane, instances in [('compute', topo['compute']),
-                             ('control', list(topo['control'].values()))]:
+    for plane, servers in [('compute', topo['compute']),
+                           ('control', list(topo['control'].values()))]:
         pretty_topo[plane] = {}
-        for instance in instances:
-            if not instance.filled:
-                instance.flavor = flavors[instance.kind]
-                instance.image = image
-                instance.availability_zone = az_selector()
-                instance.userdata = ud
-                instance.filled = True
+        for server in servers:
+            if not server.filled:
+                server.flavor = flavors[instance.kind]
+                server.image = image
+                server.availability_zone = az_selector()
+                server.userdata = ud
+                server.filled = True
                 filled_am += 1
             # This is just for visuals...
-            pretty_topo[plane][instance.name] = {
-                'name': instance.name,
-                'flavor': instance.flavor.name,
-                'image': instance.image.name,
-                'availability_zone': instance.availability_zone,
-                'kind': instance.kind.name,
+            pretty_topo[plane][server.name] = {
+                'name': server.name,
+                'flavor': server.flavor.name,
+                'image': server.image.name,
+                'availability_zone': server.availability_zone,
+                'kind': server.kind.name,
             }
     # Save whatever we did...
     if filled_am:
