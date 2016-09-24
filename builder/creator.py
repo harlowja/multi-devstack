@@ -729,6 +729,10 @@ def transform(args, helper):
             for server in helper.iter_server_by_kind(kind):
                 if server.builder_state < 101:
                     possible_servers.append(server)
+                else:
+                    print("Skipping server %s because it has"
+                          " already finishing running"
+                          " stack.sh" % (server.name))
         if not possible_servers:
             continue
         run_cmds = []
