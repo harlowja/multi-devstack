@@ -188,15 +188,15 @@ def run_and_record(remote_cmds, indent="",
             on_done(remote_cmd, index)
     to_run = []
     ran = []
-    with contextlib2.ExitStack() as e_stack:
+    with contextlib2.ExitStack() as stack:
         for index, remote_cmd in enumerate(remote_cmds):
             print("%sRunning %s" % (indent, remote_cmd))
             stderr_path = remote_cmd.stderr_path
             stderr_fh = safe_open(stderr_path, 'a+b')
-            e_stack.callback(stderr_fh.close)
+            stack.callback(stderr_fh.close)
             stdout_path = remote_cmd.stdout_path
             stdout_fh = safe_open(stdout_path, 'a+b')
-            e_stack.callback(stdout_fh.close)
+            stack.callback(stdout_fh.close)
             for (kind, filename) in [('stdout', stdout_fh.name),
                                      ('stderr', stderr_fh.name)]:
                 print("%s  For watching %s (in real-time)"
