@@ -445,12 +445,12 @@ def upload_repos(args, helper, server, indent='', last_result=None):
                                     server.hostname), args.verbose):
             for file_name in file_names:
                 target_path = "/etc/yum.repos.d/%s" % (file_name)
-                tpm_path = "/tmp/%s" % (file_name)
+                tmp_path = "/tmp/%s" % (file_name)
                 local_path = os.path.join(args.repos, file_name)
-                machine.upload(local_path, tpm_path)
+                machine.upload(local_path, tmp_path)
                 sudo = machine['sudo']
                 mv = sudo[machine['mv']]
-                mv(tpm_path, target_path)
+                mv(tmp_path, target_path)
                 yum = sudo[machine['yum']]
                 yum('clean', 'all')
 
