@@ -5,7 +5,6 @@ import copy
 import functools
 import itertools
 import json
-import logging
 import multiprocessing
 import os
 import random
@@ -20,46 +19,19 @@ import six
 import builder
 from builder import images
 from builder import pprint
+from builder import states as st
 from builder import utils
 
 from builder.roles import Roles
 
+# Suck over various constants we use.
 DEF_USER = builder.DEF_USER
 DEF_PW = builder.DEF_PW
-DEFAULT_SETTINGS = {
-    # We can't seem to alter this one more than once,
-    # so just leave it as is... todo fix this and make it so that
-    # we reset it...
-    'DATABASE_USER': DEF_USER,
-    # Devstack will also change the root database password to this,
-    # unsure why it desires to do that...
-    #
-    # This may require work...
-    'DATABASE_PASSWORD': DEF_PW,
-    # This appears to be the default, leave it be...
-    'RABBIT_USER': 'stackrabbit',
-}
-# Kind to flavor mapping.
-DEF_FLAVORS = {
-    Roles.CAP: 'm1.medium',
-    Roles.DB: 'm1.medium',
-    Roles.MAP: 'm1.large',
-    Roles.RB: 'm1.medium',
-    Roles.HV: 'm1.large',
-}
-DEF_TOPO = {
-    'templates':  {
-        Roles.CAP: '%(user)s-cap-%(rand)s',
-        Roles.MAP: '%(user)s-map-%(rand)s',
-        Roles.DB: '%(user)s-db-%(rand)s',
-        Roles.RB: '%(user)s-rb-%(rand)s',
-        Roles.HV: '%(user)s-hv-%(rand)s',
-    },
-    'control': {},
-    'compute': [],
-}
-STACK_SH = '/home/%s/devstack/stack.sh' % DEF_USER
-STACK_SOURCE = 'git://git.openstack.org/openstack-dev/devstack'
+DEF_SETTINGS = builder.DEF_SETTINGS
+DEF_FLAVORS = builder.DEF_FLAVORS
+DEF_TOPO = builder.DEF_TOPO
+STACK_SH = builder.STACK_SH
+STACK_SOURCE = builder.STACK_SOURCE
 SERVER_RETAIN_KEYS = tuple([
     'kind',
     'name',
@@ -70,12 +42,10 @@ SERVER_RETAIN_KEYS = tuple([
     'availability_zone',
     'userdata',
 ])
-LOG = logging.getLogger(__name__)
-NO_STATE = -1
 
 
 class Helper(object):
-    """Conglomerate of things for our to-be/in-progress cloud."""
+    """Conglomerate of util. things for our to-be/in-progress cloud."""
 
     def __init__(self, cloud, tracker, topo):
         self.topo = topo
@@ -132,9 +102,9 @@ class Helper(object):
             return self._settings
         else:
             settings = self.tracker.get("settings", {})
-            for setting_name in DEFAULT_SETTINGS.keys():
+            for setting_name in DEF_SETTINGS.keys():
                 if setting_name not in settings:
-                    settings[setting_name] = DEFAULT_SETTINGS[setting_name]
+                    settings[setting_name] = DEF_SETTINGS[setting_name]
             for setting_name in ['ADMIN_PASSWORD', 'SERVICE_TOKEN',
                                  'SERVICE_PASSWORD', 'RABBIT_PASSWORD']:
                 if setting_name not in settings:
@@ -296,15 +266,63 @@ def setup_git(args, helper, server, indent='', last_result=None):
     git_config_path = machine.path(".gitconfig")
     if not git_config_path.is_file():
         git_config_path.touch()
-        git = machine['git']
-        creator = helper.cloud.auth['username']
-        git("config", "--global", "user.email",
-            "%s@%s.com" % (creator, creator))
-        git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
+    # TODO(harlowja): only set this if not already set??
+    creator = helper.cloud.auth['username']
+    git = machine['git']
+    git("config", "--global", "user.email",
+        "%s@%s.com" % (creator, creator))
+    git("config", "--global", "user.name", "Mr/mrs. %s" % creator)
 
 
-def create_overlay(helper, server, indent='', last_result=None):
-    """Sets up overlay network (allows for future VM connectivity)."""
+def run_stack(args, helper, indent=""):
+
+    def on_stack_done(remote_cmd, index):
+        server = remote_cmd.server
+        server.builder_state = st.STACK_SH_END
+        helper.save_topo()
+
+    def on_stack_start(remote_cmd, index):
+        server = remote_cmd.server
+        server.builder_state = st.STACK_SH_START
+        helper.save_topo()
+
+    run_stack_order = [
+        [Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV],
+    ]
+    for group in run_stack_order:
+        possible_servers = []
+        for kind in group:
+            for server in helper.iter_server_by_kind(kind):
+                if server.builder_state < st.STACK_SH_END:
+                    possible_servers.append(server)
+                else:
+                    print("%sSkipping server %s because it has"
+                          " already finishing running"
+                          " stack.sh" % (indent, server.name))
+        if not possible_servers:
+            continue
+        run_cmds = []
+        for server in possible_servers:
+            if server.builder_state == st.STACK_SH_START:
+                print("%sWARNING: Server %s already started running `%s` this"
+                      " may not end well as stack.sh is not"
+                      " idempotent..." % (indent, server.name, STACK_SH))
+            machine = helper.machines[server.name]
+            run_cmds.append(utils.RemoteCommand(machine[STACK_SH],
+                                                scratch_dir=args.scratch_dir,
+                                                server=server))
+        max_workers = min(args.max_workers, len(run_cmds))
+        utils.run_and_record(run_cmds, verbose=args.verbose,
+                             max_workers=max_workers, indent=indent,
+                             on_start=on_stack_start,
+                             on_done=on_stack_done)
+
+
+def create_overlay(args, helper, indent=''):
+    pass
+
+
+def output_cloud(args, helper, indent=''):
     pass
 
 
@@ -573,7 +591,7 @@ def create_topo(args, cloud, tracker):
             'rand': random.randrange(1, 99),
         }
         hvs.append(munch.Munch(name=name, filled=False,
-                               kind=Roles.HV, builder_state=NO_STATE))
+                               kind=Roles.HV, builder_state=st.NO_STATE))
     topo['compute'] = hvs[0:args.hypervisors]
     for r in Roles:
         if r != Roles.HV:
@@ -585,7 +603,7 @@ def create_topo(args, cloud, tracker):
                 }
                 topo['control'][r] = munch.Munch(
                     name=name, filled=False,
-                    kind=r, builder_state=NO_STATE)
+                    kind=r, builder_state=st.NO_STATE)
     tracker["topo"] = topo
     tracker.sync()
     return topo
@@ -646,7 +664,7 @@ def bake_servers(args, cloud, tracker, topo):
                 merge_servers(master_server, server)
                 # This is new so clear out whatever existing state there
                 # may have been from the prior servers....
-                master_server.builder_state = NO_STATE
+                master_server.builder_state = st.NO_STATE
                 master_server.ip = None
     else:
         print("  Spawning none.")
@@ -662,16 +680,6 @@ def transform(args, helper):
     def on_done_show_hostnames(helper, indent=''):
         for server in helper.iter_servers():
             print("%s%s => %s" % (indent, server.name, server.hostname))
-
-    def on_stack_done(remote_cmd, index):
-        server = remote_cmd.server
-        server.builder_state = 101
-        helper.save_topo()
-
-    def on_stack_start(remote_cmd, index):
-        server = remote_cmd.server
-        server.builder_state = 100
-        helper.save_topo()
 
     def on_done_adjust_known_hosts(helper, indent=''):
         for server in helper.iter_servers():
@@ -694,18 +702,24 @@ def transform(args, helper):
 
     # Mini-state/transition diagram + state identifiers (for resuming).
     states = [
-        (0, 1, bind_hostname, on_done_show_hostnames),
-        (10, 11,
+        (st.BIND_START, st.BIND_END, bind_hostname, on_done_show_hostnames),
+        (st.INTER_SSH_START, st.INTER_SSH_END,
          functools.partial(interconnect_ssh, args),
          on_done_adjust_known_hosts),
-        (20, 21, functools.partial(setup_git, args), None),
-        (30, 31, functools.partial(upload_repos, args), None),
-        (40, 41, functools.partial(install_some_packages, args), None),
-        (50, 51, create_overlay, None),
-        (60, 61, functools.partial(clone_devstack, args), None),
-        (70, 71, functools.partial(patch_devstack, args), None),
-        (80, 81, functools.partial(upload_extras, args), None),
-        (90, 91, functools.partial(create_local_files, args), None),
+        (st.GIT_SETUP_START, st.GIT_SETUP_END,
+         functools.partial(setup_git, args), None),
+        (st.UPLOAD_REPO_START, st.UPLOAD_REPO_END,
+         functools.partial(upload_repos, args), None),
+        (st.INSTALL_PKG_START, st.INSTALL_PKG_END,
+         functools.partial(install_some_packages, args), None),
+        (st.CLONE_STACK_START, st.CLONE_STACK_END,
+         functools.partial(clone_devstack, args), None),
+        (st.PATCH_STACK_START, st.PATCH_STACK_END,
+         functools.partial(patch_devstack, args), None),
+        (st.UPLOAD_EXTRAS_START, st.UPLOAD_EXTRAS_END,
+         functools.partial(upload_extras, args), None),
+        (st.CREATE_LOCAL_START, st.CREATE_LOCAL_END,
+         functools.partial(create_local_files, args), None),
     ]
     for (pre_state, post_state, func, func_on_done) in states:
         if isinstance(func, functools.partial):
@@ -719,39 +733,17 @@ def transform(args, helper):
                          func_details=func_details,
                          func_name=func_name)
 
-    # Now finally run stack and do it as best as we can.
-    print("Activating stack.sh on all server s(in the right order)")
-    run_stack_order = [
-        [Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV],
-    ]
-    for group in run_stack_order:
-        possible_servers = []
-        for kind in group:
-            for server in helper.iter_server_by_kind(kind):
-                if server.builder_state < 101:
-                    possible_servers.append(server)
-                else:
-                    print("Skipping server %s because it has"
-                          " already finishing running"
-                          " stack.sh" % (server.name))
-        if not possible_servers:
-            continue
-        run_cmds = []
-        for server in possible_servers:
-            if server.builder_state == 100:
-                print("WARNING: Server %s already started running `%s` this"
-                      " may not end well as stack.sh is not"
-                      " idempotent..." % (server.name, STACK_SH))
-            machine = helper.machines[server.name]
-            stack_cmd = utils.RemoteCommand(machine[STACK_SH],
-                                            scratch_dir=args.scratch_dir,
-                                            server=server,
-                                            on_start=on_stack_start,
-                                            on_done=on_stack_done)
-            run_cmds.append(stack_cmd)
-        max_workers = min(args.max_workers, len(run_cmds))
-        utils.run_and_record(run_cmds, verbose=args.verbose,
-                             max_workers=max_workers)
+    print("Creating (and/or adjusting) overlay network.")
+    create_overlay(args, helper, indent="  ")
+
+    print("Activating stack.sh on all servers (in the right order).")
+    run_stack(args, helper, indent="  ")
+
+    # Now dump access information for the created cloud.
+    print("============")
+    print("Cloud access")
+    print("============")
+    output_cloud(args, helper, indent="  ")
 
 
 def create(args, cloud, tracker):
