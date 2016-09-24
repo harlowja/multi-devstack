@@ -39,7 +39,7 @@ def main():
     parser.add_argument("--state",
                         help="file to read/write action state"
                              " information into/from (default=%(default)s)",
-                        default=os.path.join(os.getcwd(), "state.sqlite"),
+                        default=os.path.join(os.getcwd(), "state.bin"),
                         metavar="PATH")
     parser.add_argument("-v", "--verbose",
                         help=("run in verbose mode (may be specified more"
