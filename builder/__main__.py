@@ -82,7 +82,6 @@ def main():
             print("Cloud:")
             pretty_cloud = collections.OrderedDict([
                 ('Authentication url', cloud.auth['auth_url']),
-                ('Authentication token', cloud.auth_token),
             ])
             if cloud.region_name:
                 pretty_cloud['Region'] = cloud.region_name
