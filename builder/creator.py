@@ -712,7 +712,7 @@ def transform(args, helper):
             func_details = func.func.__doc__
             func_name = reflection.get_callable_name(func.func)
         else:
-            func_name = reflection.get_callable_name(func.func)
+            func_name = reflection.get_callable_name(func)
             func_details = func.__doc__
         helper.maybe_run(pre_state, post_state, func,
                          func_on_done=func_on_done,
