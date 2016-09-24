@@ -9,7 +9,6 @@ import logging
 import multiprocessing
 import os
 import random
-import sys
 
 import contextlib2
 import futurist
@@ -98,15 +97,7 @@ class Helper(object):
 
     def maybe_run(self, pre_state, post_state,
                   func, func_on_done=None, indent='',
-                  func_name=None, func_details='',
-                  server_ordering=None):
-        def key_func(item):
-            if not server_ordering:
-                return sys.maxint
-            try:
-                return server_ordering.index(item.kind)
-            except ValueError:
-                return sys.maxint
+                  func_name=None, func_details=''):
         if not func_details:
             func_details = getattr(func, '__doc__', '')
         if not func_name:
@@ -118,8 +109,6 @@ class Helper(object):
         for server in self.iter_servers():
             if server.builder_state < post_state:
                 applicable_servers.append(server)
-        applicable_servers = sorted(applicable_servers,
-                                    key=key_func)
         last_result = None
         for server in applicable_servers:
             server.builder_state = pre_state
@@ -472,17 +461,6 @@ def upload_extras(args, helper, server, indent='', last_result=None):
                 machine.upload(local_path, target_path)
 
 
-def run_stack(args, helper, server, indent='', last_result=None):
-    """Activates stack.sh on all server (in the right order)."""
-    stack_sh = STACK_SH
-    machine = helper.machines[server.name]
-    stack_cmd = utils.RemoteCommand(machine[stack_sh],
-                                    scratch_dir=args.scratch_dir,
-                                    server=server)
-    utils.run_and_record([stack_cmd],
-                         verbose=args.verbose, indent=indent)
-
-
 def create_local_files(args, helper, server, indent='', last_result=None):
     """Creates and uploads local.conf files for devstack."""
     # This needs to be done so that servers that will not have rabbit
@@ -685,6 +663,16 @@ def transform(args, helper):
         for server in helper.iter_servers():
             print("%s%s => %s" % (indent, server.name, server.hostname))
 
+    def on_stack_done(remote_cmd, index):
+        server = remote_cmd.server
+        server.builder_state = 101
+        helper.save_topo()
+
+    def on_stack_start(remote_cmd, index):
+        server = remote_cmd.server
+        server.builder_state = 100
+        helper.save_topo()
+
     def on_done_adjust_known_hosts(helper, indent=''):
         for server in helper.iter_servers():
             machine = helper.machines[server.name]
@@ -705,38 +693,58 @@ def transform(args, helper):
                                                       helper.server_count))
 
     # Mini-state/transition diagram + state identifiers (for resuming).
-    run_stack_server_ordering = [
-        Roles.RB, Roles.DB, Roles.MAP, Roles.CAP, Roles.HV,
-    ]
     states = [
-        (0, 1, bind_hostname, on_done_show_hostnames, None),
+        (0, 1, bind_hostname, on_done_show_hostnames),
         (10, 11,
          functools.partial(interconnect_ssh, args),
-         on_done_adjust_known_hosts, None),
-        (20, 21, functools.partial(setup_git, args), None, None),
-        (30, 31, functools.partial(upload_repos, args), None, None),
-        (40, 41, functools.partial(install_some_packages, args), None, None),
-        (50, 51, create_overlay, None, None),
-        (60, 61, functools.partial(clone_devstack, args), None, None),
-        (70, 71, functools.partial(patch_devstack, args), None, None),
-        (80, 81, functools.partial(upload_extras, args), None, None),
-        (90, 91, functools.partial(create_local_files, args), None, None),
-        (100, 101,
-         functools.partial(run_stack, args), None,
-         run_stack_server_ordering),
+         on_done_adjust_known_hosts),
+        (20, 21, functools.partial(setup_git, args), None),
+        (30, 31, functools.partial(upload_repos, args), None),
+        (40, 41, functools.partial(install_some_packages, args), None),
+        (50, 51, create_overlay, None),
+        (60, 61, functools.partial(clone_devstack, args), None),
+        (70, 71, functools.partial(patch_devstack, args), None),
+        (80, 81, functools.partial(upload_extras, args), None),
+        (90, 91, functools.partial(create_local_files, args), None),
     ]
-    for (pre_state, post_state, func,
-         func_on_done, server_ordering) in states:
-        func_details = None
-        func_name = None
+    for (pre_state, post_state, func, func_on_done) in states:
         if isinstance(func, functools.partial):
             func_details = func.func.__doc__
             func_name = reflection.get_callable_name(func.func)
+        else:
+            func_name = reflection.get_callable_name(func.func)
+            func_details = func.__doc__
         helper.maybe_run(pre_state, post_state, func,
                          func_on_done=func_on_done,
                          func_details=func_details,
-                         func_name=func_name,
-                         server_ordering=server_ordering)
+                         func_name=func_name)
+    # Now finally run stack and do it as best as we can.
+    print("Activating stack.sh on all server s(in the right order)")
+    run_stack_order = [
+        [Roles.RB, Roles.DB], [Roles.MAP], [Roles.CAP], [Roles.HV],
+    ]
+    for group in run_stack_order:
+        possible_servers = []
+        for kind in group:
+            for server in helper.iter_server_by_kind(kind):
+                if server.builder_state < 101:
+                    possible_servers.append(server)
+        if not possible_servers:
+            continue
+        run_cmds = []
+        for server in possible_servers:
+            if server.builder_state == 100:
+                print("WARNING: Server %s already started running `%s` this"
+                      " may not end well as stack.sh is not"
+                      " idempotent..." % (server.name, STACK_SH))
+            machine = helper.machines[server.name]
+            stack_cmd = utils.RemoteCommand(machine[STACK_SH],
+                                            scratch_dir=args.scratch_dir,
+                                            server=server,
+                                            on_start=on_stack_start,
+                                            on_done=on_stack_done)
+            run_cmds.append(stack_cmd)
+        utils.run_and_record(run_cmds, verbose=args.verbose)
 
 
 def create(args, cloud, tracker):
