@@ -718,6 +718,7 @@ def transform(args, helper):
                          func_on_done=func_on_done,
                          func_details=func_details,
                          func_name=func_name)
+
     # Now finally run stack and do it as best as we can.
     print("Activating stack.sh on all server s(in the right order)")
     run_stack_order = [
@@ -748,7 +749,9 @@ def transform(args, helper):
                                             on_start=on_stack_start,
                                             on_done=on_stack_done)
             run_cmds.append(stack_cmd)
-        utils.run_and_record(run_cmds, verbose=args.verbose)
+        max_workers = min(args.max_workers, len(run_cmds))
+        utils.run_and_record(run_cmds, verbose=args.verbose,
+                             max_workers=max_workers)
 
 
 def create(args, cloud, tracker):
