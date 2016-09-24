@@ -576,12 +576,6 @@ def fill_topo(args, cloud, tracker,
 
 
 def wait_servers(args, cloud, tracker, servers):
-    def get_server_ip(server):
-        for field in ['private_v4', 'accessIPv4']:
-            ip = server.get(field)
-            if ip:
-                return ip
-        return None
     # Wait for them to actually become active...
     print("Waiting for instances to enter ACTIVE state.")
     for server in servers:
@@ -589,7 +583,7 @@ def wait_servers(args, cloud, tracker, servers):
             if server.status != 'ACTIVE':
                 a_server = cloud.wait_for_server(server, auto_ip=False)
                 merge_servers(server, a_server)
-        server_ip = get_server_ip(server)
+        server_ip = utils.get_server_ip(server)
         if not server_ip:
             raise RuntimeError("Instance %s spawned but no ip"
                                " was found associated" % server.name)

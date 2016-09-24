@@ -144,6 +144,14 @@ def safe_open(path, mode):
     return open(path, mode)
 
 
+def get_server_ip(server):
+    for field in ('private_v4', 'accessIPv4'):
+        ip = server.get(field)
+        if ip:
+            return ip
+    return None
+
+
 def trim_it(block, max_len, reverse=False):
     block_len = len(block)
     if not reverse:
