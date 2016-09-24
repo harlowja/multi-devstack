@@ -25,8 +25,10 @@ TRACE = 5
 
 
 def main():
-    prog_name = os.getenv("PROGRAM_NAME", default=sys.argv[0])
-    prog_name = os.path.basename(prog_name)
+    if 'PROGRAM_NAME' in os.environ:
+        prog_name = os.path.basename(os.getenv("PROGRAM_NAME"))
+    else:
+        prog_name = None
     parser = argparse.ArgumentParser(prog=prog_name)
     parser.add_argument("--cloud",
                         help="specific os-client-config cloud to"
