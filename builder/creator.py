@@ -682,6 +682,8 @@ def transform(args, helper):
             print("%s%s => %s" % (indent, server.name, server.hostname))
 
     def on_done_adjust_known_hosts(helper, indent=''):
+        print("%sRegenerating %s 'known_hosts'"
+              " file/s" % (indent, helper.server_count))
         for server in helper.iter_servers():
             machine = helper.machines[server.name]
             key_scan = machine['ssh-keyscan']
