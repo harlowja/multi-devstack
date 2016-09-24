@@ -174,6 +174,11 @@ def bind_subparser(subparsers):
                                     " up (default=%(default)s)",
                                default=max_workers, type=pos_int,
                                metavar='NUMBER')
+    parser_create.add_argument("-n", "--new-topo",
+                               help=("create a new topology instead"
+                                     " of recreating an existing stored"
+                                     " one (if it exists)"),
+                               default=False, action='store_true')
     parser_create.add_argument("-a", "--availability-zone",
                                help="explicit availability"
                                     " to use (if not provided one will"
@@ -592,7 +597,10 @@ def wait_servers(args, cloud, tracker, servers):
 
 
 def create_topo(args, cloud, tracker):
-    topo = tracker.get("topo")
+    if args.new_topo:
+        topo = None
+    else:
+        topo = tracker.get("topo")
     if not topo:
         topo = copy.deepcopy(DEF_TOPO)
     hvs = topo['compute']
