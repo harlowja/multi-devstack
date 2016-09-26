@@ -1,4 +1,4 @@
-From f2f69843c79543817a495d0333b0782a49ce425e Mon Sep 17 00:00:00 2001
+From 9215587ddd8c8169151f36ec8a86271c9de36843 Mon Sep 17 00:00:00 2001
 From: Joshua Harlow <jxharlow@godaddy.com>
 Date: Tue, 20 Sep 2016 17:05:53 -0700
 Subject: [PATCH] Add specific common functions to detect cell-region and
@@ -6,32 +6,34 @@ Subject: [PATCH] Add specific common functions to detect cell-region and
 
 Change-Id: I190a31fed00b794726c001f25dc677273a92969a
 ---
- functions-common | 18 ++++++++++++++++++
- 1 file changed, 18 insertions(+)
+ functions-common | 20 ++++++++++++++++++++
+ 1 file changed, 20 insertions(+)
 
 diff --git a/functions-common b/functions-common
-index 04f7c0f..0532dcf 100644
+index 6e166c5..cd0b029 100644
 --- a/functions-common
 +++ b/functions-common
-@@ -1930,6 +1930,24 @@ function is_service_enabled {
+@@ -1930,6 +1930,26 @@ function is_service_enabled {
      return $enabled
  }
  
 +function is_cell_child {
-+    local service="n-cell-child"
 +    local xtrace=$(set +o | grep xtrace)
 +    set +o xtrace
++    local service="n-cell-child"
 +    local enabled=1
 +    [[ ,${ENABLED_SERVICES}, =~ ,${service}, ]] && enabled=0
++    $xtrace
 +    return $enabled
 +}
 +
 +function is_cell_region {
-+    local service="n-cell-region"
 +    local xtrace=$(set +o | grep xtrace)
++    local service="n-cell-region"
 +    set +o xtrace
 +    local enabled=1
 +    [[ ,${ENABLED_SERVICES}, =~ ,${service}, ]] && enabled=0
++    $xtrace
 +    return $enabled
 +}
 +
