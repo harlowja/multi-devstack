@@ -696,8 +696,8 @@ def transform(args, helper):
             print("%s%s => %s" % (indent, server.name, server.hostname))
 
     def on_done_adjust_known_hosts(helper, indent=''):
-        print("%sRegenerating %s 'known_hosts'"
-              " file/s" % (indent, helper.server_count))
+        print("%s- Regenerating %s 'known_hosts'"
+              " file/s, please wait..." % (indent, helper.server_count))
         for server in helper.iter_servers():
             machine = helper.machines[server.name]
             key_scan = machine['ssh-keyscan']
@@ -713,8 +713,6 @@ def transform(args, helper):
             new_known_hosts_path.touch()
             new_known_hosts_path.write(contents.getvalue())
             new_known_hosts_path.move(known_hosts_path)
-        print("%sDelivered ssh-keys to %s servers" % (indent,
-                                                      helper.server_count))
 
     # Mini-state/transition diagram + state identifiers (for resuming).
     states = [
