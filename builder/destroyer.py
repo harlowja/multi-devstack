@@ -18,10 +18,6 @@ def bind_subparser(subparsers):
                                 help=("clear all previously created"
                                       " servers (even ones not in the"
                                       " current topology)"))
-    parser_destroy.add_argument("-c", "--clear", action='store_true',
-                                default=False,
-                                help=("completly clear state file on"
-                                      " completion"))
     parser_destroy.set_defaults(func=destroy)
     return parser_destroy
 
@@ -92,6 +88,3 @@ def destroy(args, cloud, tracker):
                 tracker['maybe_servers'] = maybe_servers
                 delete_from_topo(server_name, tracker)
                 tracker.sync()
-    if args.clear:
-        tracker.clear()
-        tracker.sync()

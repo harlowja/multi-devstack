@@ -4,6 +4,7 @@ from __future__ import print_function
 
 import argparse
 import collections
+import contextlib
 import hashlib
 import logging
 import os
@@ -14,12 +15,12 @@ sys.path.insert(0, os.path.join(os.path.abspath(os.pardir)))
 sys.path.insert(0, os.path.abspath(os.getcwd()))
 
 import shade
-import sqlitedict
 
 from builder import cows
 from builder import creator
 from builder import destroyer
 from builder import pprint
+from builder import utils
 
 TRACE = 5
 
@@ -69,18 +70,22 @@ def main():
     try:
         cloud = shade.openstack_cloud(cloud=args.cloud,
                                       region_name=args.cloud_region)
-        table_hasher = hashlib.new("md5")
-        table_hasher.update(cloud.auth['auth_url'])
+        cloud_name_chunks = [cloud.auth['auth_url']]
         if cloud.region_name:
-            table_hasher.update(cloud.region_name)
-        table_hasher.update(cloud.auth['username'])
-        table_hasher.update(cloud.auth['project_name'])
-        with sqlitedict.SqliteDict(filename=args.state, flag='c',
-                                   tablename=table_hasher.hexdigest(),
-                                   autocommit=False) as tracker:
+            cloud_name_chunks.append(cloud.region_name)
+        cloud_name_chunks.append(cloud.auth['username'])
+        cloud_name_chunks.append(cloud.auth['project_name'])
+        cloud_hasher = hashlib.new("md5")
+        for piece in cloud_name_chunks:
+            cloud_hasher.update(piece)
+        cloud_name = cloud_hasher.hexdigest()
+        clouds = utils.Clouds(args.state, "%s.lock" % (args.state))
+        clouds.open()
+        with contextlib.closing(clouds):
+            tracker = clouds.get_tracker(cloud_name)
             print("Action: '%s'" % (args.func.__doc__))
-            print("State: '%s'" % tracker.filename)
-            print("State table: '%s'" % tracker.tablename)
+            print("State: '%s'" % clouds.path)
+            print("Store name: '%s'" % cloud_name)
             print("Cloud:")
             pretty_cloud = collections.OrderedDict([
                 ('Authentication url', cloud.auth['auth_url']),

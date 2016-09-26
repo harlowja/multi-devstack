@@ -3,20 +3,25 @@
 from __future__ import print_function
 
 from binascii import hexlify
+
+import collections
 import errno
 import functools
 import itertools
 import os
+import pickle
 import random
 import socket
 import string
 import sys
 import threading
 import time
+import weakref
 
 import contextlib2
 import futurist
 
+import fasteners
 from monotonic import monotonic as now
 import paramiko
 import plumbum
@@ -26,6 +31,89 @@ from paramiko.common import DEBUG
 from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 
 PASS_CHARS = string.ascii_lowercase + string.digits
+
+
+class TooManyAtOnceException(Exception):
+    pass
+
+
+class Tracker(collections.MutableMapping):
+    """Tracker that tracks data about a single cloud."""
+
+    def __init__(self, name, clouds, data):
+        self._clouds = weakref.proxy(clouds)
+        self._data = data
+        self._name = name
+
+    def __setitem__(self, key, value):
+        self._data[key] = value
+
+    def __delitem__(self, key):
+        del self._data[key]
+
+    def __len__(self):
+        return len(self._data)
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def save(self):
+        self._clouds.save()
+
+    sync = save
+
+
+class Clouds(object):
+    """Simple data storage, that should be multi-process safe."""
+
+    def __init__(self, path, lock_path):
+        self.path = path
+        self.lock = fasteners.InterProcessLock(lock_path)
+        self._clouds = {}
+
+    def get_tracker(self, cloud_name):
+        if not self.lock.acquired:
+            raise IOError("Can only get a cloud from a file that has"
+                          " been correctly locked")
+        try:
+            data = self._clouds[cloud_name]
+        except KeyError:
+            self._clouds[cloud_name] = data = {}
+            self.save()
+        return Tracker(cloud_name, self, data)
+
+    def open(self, blocking=False):
+        if self.lock.acquired:
+            return
+        gotten = self.lock.acquire(blocking=blocking)
+        if not gotten:
+            raise TooManyAtOnceException("Only one process at a time allowed")
+        with open(self.path, "a+b") as fh:
+            fh.seek(0)
+            contents = fh.read()
+            if contents:
+                self._clouds = pickle.loads(contents)
+            else:
+                self._clouds = {}
+
+    def save(self):
+        if not self.lock.acquired:
+            raise IOError("Can only save a cloud data object that has"
+                          " been correctly locked")
+        with open(self.path, "wb") as fh:
+            pickle.dump(self._clouds, fh, -1)
+            fh.flush()
+
+    def close(self):
+        if self.lock.acquired:
+            self.save()
+            self._data = {}
+            self.lock.release()
+
+    sync = save
 
 
 class Spinner(object):

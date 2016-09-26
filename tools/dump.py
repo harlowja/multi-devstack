@@ -1,10 +1,10 @@
 import argparse
+import pickle
 import pprint as pp
 import os
 import sys
 
 import munch
-import sqlitedict
 
 possible_topdir = os.path.normpath(os.path.join(os.path.abspath(sys.argv[0]),
                                    os.pardir,
@@ -21,16 +21,21 @@ def main():
     parser.add_argument("--state",
                         help="file to read/write action state"
                              " information into/from (default=%(default)s)",
-                        default=os.path.join(os.getcwd(), "state.sqlite"),
+                        default=os.path.join(os.getcwd(), "state.bin"),
                         metavar="PATH")
-    parser.add_argument("-t", "--table",
-                        help="table name to use",
-                        default=None, required=True)
+    parser.add_argument("-c", "--cloud",
+                        help="cloud name to use",
+                        default=None)
     args = parser.parse_args()
-    with sqlitedict.SqliteDict(filename=args.state, flag='r',
-                               tablename=args.table,
-                               autocommit=False) as tracker:
-        pp.pprint(munch.unmunchify(dict(tracker)))
+    with open(args.state, 'rb') as fh:
+        contents = fh.read()
+        if contents:
+            data = pickle.loads(contents)
+        else:
+            data = {}
+        if args.cloud:
+            data = data[args.cloud]
+        pp.pprint(data)
 
 
 if __name__ == '__main__':
