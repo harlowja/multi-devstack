@@ -110,7 +110,7 @@ class Clouds(object):
     def close(self):
         if self.lock.acquired:
             self.save()
-            self._data = {}
+            self._clouds = {}
             self.lock.release()
 
     sync = save
@@ -221,7 +221,10 @@ class RemoteCommand(object):
     def __str__(self):
         host = None
         if self.server:
-            host = self.server.name
+            try:
+                host = self.server.hostname
+            except AttributeError:
+                host = self.server.name
         if not host:
             host = self.cmd.machine.host
         return "`%s` running on server '%s'" % (self.full_name, host)
