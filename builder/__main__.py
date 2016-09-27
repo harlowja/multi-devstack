@@ -7,6 +7,7 @@ import collections
 import contextlib
 import hashlib
 import logging
+import pickle
 import os
 import sys
 import traceback
@@ -23,6 +24,45 @@ from builder import pprint
 from builder import utils
 
 TRACE = 5
+
+
+def make_saver(path, clouds):
+
+    def saver():
+        with open(path, 'a+b') as fh:
+            # First byte is used for the lock.
+            fh.seek(1)
+            fh.write(pickle.dumps(clouds, -1))
+
+    return saver
+
+
+@contextlib.contextmanager
+def fetch_tracker(path, cloud_name):
+    lock = utils.FileOffsetLock(path)
+    gotten = lock.acquire()
+    if not gotten:
+        raise RuntimeError("State path '%s' is currently in"
+                           " use (and only one application may"
+                           " manipulate it at a time)" % path)
+    try:
+        with open(path, 'a+b') as fh:
+            # First byte is used for the lock.
+            fh.seek(1)
+            fh_contents = fh.read()
+            if fh_contents:
+                clouds = pickle.loads(fh_contents)
+            else:
+                clouds = {}
+        saver = make_saver(path, clouds)
+        try:
+            cloud = clouds[cloud_name]
+        except KeyError:
+            clouds[cloud_name] = cloud = {}
+            saver()
+        yield utils.Tracker(cloud, saver)
+    finally:
+        lock.release()
 
 
 def main():
@@ -42,7 +82,7 @@ def main():
     parser.add_argument("--state",
                         help="file to read/write action state"
                              " information into/from (default=%(default)s)",
-                        default=os.path.join(os.getcwd(), "state.bin"),
+                        default=os.path.join(os.getcwd(), "state.pkl"),
                         metavar="PATH")
     parser.add_argument("-v", "--verbose",
                         help=("run in verbose mode (may be specified more"
@@ -79,13 +119,10 @@ def main():
         for piece in cloud_name_chunks:
             cloud_hasher.update(piece)
         cloud_name = cloud_hasher.hexdigest()
-        clouds = utils.Clouds(args.state, "%s.lock" % (args.state))
-        clouds.open()
-        with contextlib.closing(clouds):
-            tracker = clouds.get_tracker(cloud_name)
-            print("Action: '%s'" % (args.func.__doc__))
-            print("State: '%s'" % clouds.path)
-            print("Store name: '%s'" % cloud_name)
+        with fetch_tracker(args.state, cloud_name) as tracker:
+            print("Action: '%s'" % args.func.__doc__)
+            print("State: '%s'" % args.state)
+            print("Tracker name: '%s'" % cloud_name)
             print("Cloud:")
             pretty_cloud = collections.OrderedDict([
                 ('Authentication url', cloud.auth['auth_url']),

@@ -9,7 +9,6 @@ import multiprocessing
 import os
 import random
 
-import contextlib2
 import futurist
 import jinja2
 import munch
@@ -28,7 +27,6 @@ from builder.roles import Roles
 # Suck over various constants we use.
 DEF_USER = builder.DEF_USER
 DEF_PW = builder.DEF_PW
-DEF_SETTINGS = builder.DEF_SETTINGS
 DEF_FLAVORS = builder.DEF_FLAVORS
 DEF_TOPO = builder.DEF_TOPO
 STACK_SH = builder.STACK_SH
@@ -43,97 +41,6 @@ SERVER_RETAIN_KEYS = tuple([
     'availability_zone',
     'userdata',
 ])
-
-
-class Helper(object):
-    """Conglomerate of util. things for our to-be/in-progress cloud."""
-
-    def __init__(self, cloud, tracker, topo):
-        self.topo = topo
-        self.machines = {}
-        self.tracker = tracker
-        self.cloud = cloud
-        self._settings = None
-        self._exit_stack = contextlib2.ExitStack()
-
-    def iter_servers(self):
-        compute_servers = self.topo['compute']
-        control_servers = list(self.topo['control'].values())
-        for server in itertools.chain(compute_servers, control_servers):
-            yield server
-
-    @property
-    def server_count(self):
-        return len(list(self.iter_servers()))
-
-    def maybe_run(self, pre_state, post_state,
-                  func, func_on_done=None, indent='',
-                  func_name=None, func_details=''):
-        if not func_details:
-            func_details = getattr(func, '__doc__', '')
-        if not func_name:
-            func_name = reflection.get_callable_name(func)
-        print("%sActivating function '%s'" % (indent, func_name))
-        if func_details:
-            print("%sDetails: '%s'" % (indent, func_details))
-        applicable_servers = []
-        for server in self.iter_servers():
-            if server.builder_state < post_state:
-                applicable_servers.append(server)
-        last_result = None
-        for server in applicable_servers:
-            server.builder_state = pre_state
-            self.save_topo()
-            last_result = func(self, server,
-                               last_result=last_result,
-                               indent=indent + "  ")
-            server.builder_state = post_state
-            self.save_topo()
-        if func_on_done is not None and applicable_servers:
-            func_on_done(self, indent=indent + "  ")
-        print("%sFunction '%s' has finished." % (indent, func_name))
-
-    def save_topo(self):
-        self.tracker['topo'] = self.topo
-        self.tracker.sync()
-
-    @property
-    def settings(self):
-        if self._settings is not None:
-            return self._settings
-        else:
-            settings = self.tracker.get("settings", {})
-            for setting_name in DEF_SETTINGS.keys():
-                if setting_name not in settings:
-                    settings[setting_name] = DEF_SETTINGS[setting_name]
-            for setting_name in ['ADMIN_PASSWORD', 'SERVICE_TOKEN',
-                                 'SERVICE_PASSWORD', 'RABBIT_PASSWORD']:
-                if setting_name not in settings:
-                    settings[setting_name] = utils.generate_secret()
-            self.tracker['settings'] = settings
-            self.tracker.sync()
-            self._settings = settings
-            return self._settings
-
-    def iter_server_by_kind(self, kind):
-        for server in self.iter_servers():
-            if server.kind == kind:
-                yield server
-
-    def __enter__(self):
-        return self
-
-    def bind_machine(self, server_name, machine):
-        matched_servers = [server for server in self.iter_servers()
-                           if server.name == server_name]
-        if not matched_servers:
-            raise RuntimeError("Can not match ssh machine"
-                               " to unknown server '%s'" % server_name)
-        self.machines[server_name] = machine
-        self._exit_stack.callback(machine.close)
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self._exit_stack.close()
 
 
 def pos_int(val):
@@ -832,7 +739,7 @@ def create(args, cloud, tracker):
     # Now turn those servers into something useful...
     max_workers = min(args.max_workers,
                       len(existing_servers) + len(new_servers))
-    with Helper(cloud, tracker, topo) as helper:
+    with utils.BuildHelper(cloud, tracker, topo) as helper:
         futs = []
         with utils.Spinner("Validating ssh connectivity"
                            " using %s threads" % (max_workers),

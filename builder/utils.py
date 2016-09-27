@@ -6,23 +6,22 @@ from binascii import hexlify
 
 import collections
 import errno
+import fcntl
 import functools
 import itertools
 import os
-import pickle
 import random
 import socket
 import string
 import sys
 import threading
 import time
-import weakref
 
 import contextlib2
 import futurist
 
-import fasteners
 from monotonic import monotonic as now
+from oslo_utils import reflection
 import paramiko
 import plumbum
 import six
@@ -30,20 +29,141 @@ import six
 from paramiko.common import DEBUG
 from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 
+import builder as bu
+
 PASS_CHARS = string.ascii_lowercase + string.digits
 
 
-class TooManyAtOnceException(Exception):
-    pass
+class FileOffsetLock(object):
+    """Remove me when https://github.com/harlowja/fasteners/pull/10 merges...
+
+    This lock is **not** thread safe, only safe across processes (aka it
+    is not thread aware).
+    """
+
+    def __init__(self, path, offset=0):
+        self.path = path
+        self.offset = offset
+        self.handle = open(path, 'a+b')
+        self.handle.seek(offset)
+        self.acquired = False
+
+    def acquire(self):
+        try:
+            fcntl.lockf(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB, 1,
+                        self.handle.tell(), os.SEEK_CUR)
+        except IOError as e:
+            if e.errno in (errno.EACCES, errno.EAGAIN):
+                return False
+            else:
+                raise
+         else:
+             self.acquired = True
+             return True
+
+    def release(self):
+        if self.acquired:
+            fcntl.lockf(self.handle, fcntl.LOCK_UN)
+            self.acquired = False
+
+
+class BuildHelper(object):
+    """Conglomerate of util. things for our to-be/in-progress cloud."""
+
+    def __init__(self, cloud, tracker, topo):
+        self.topo = topo
+        self.machines = {}
+        self.tracker = tracker
+        self.cloud = cloud
+        self._settings = None
+        self._exit_stack = contextlib2.ExitStack()
+
+    def iter_servers(self):
+        compute_servers = self.topo['compute']
+        control_servers = list(self.topo['control'].values())
+        for server in itertools.chain(compute_servers, control_servers):
+            yield server
+
+    @property
+    def server_count(self):
+        return len(list(self.iter_servers()))
+
+    def maybe_run(self, pre_state, post_state,
+                  func, func_on_done=None, indent='',
+                  func_name=None, func_details=''):
+        if not func_details:
+            func_details = getattr(func, '__doc__', '')
+        if not func_name:
+            func_name = reflection.get_callable_name(func)
+        print("%sActivating function '%s'" % (indent, func_name))
+        if func_details:
+            print("%sDetails: '%s'" % (indent, func_details))
+        applicable_servers = []
+        for server in self.iter_servers():
+            if server.builder_state < post_state:
+                applicable_servers.append(server)
+        last_result = None
+        for server in applicable_servers:
+            server.builder_state = pre_state
+            self.save_topo()
+            last_result = func(self, server,
+                               last_result=last_result,
+                               indent=indent + "  ")
+            server.builder_state = post_state
+            self.save_topo()
+        if func_on_done is not None and applicable_servers:
+            func_on_done(self, indent=indent + "  ")
+        print("%sFunction '%s' has finished." % (indent, func_name))
+
+    def save_topo(self):
+        self.tracker['topo'] = self.topo
+        self.tracker.sync()
+
+    @property
+    def settings(self):
+        if self._settings is not None:
+            return self._settings
+        else:
+            settings = self.tracker.get("settings", {})
+            for setting_name in bu.DEF_SETTINGS.keys():
+                if setting_name not in settings:
+                    settings[setting_name] = bu.DEF_SETTINGS[setting_name]
+            for setting_name in ['ADMIN_PASSWORD', 'SERVICE_TOKEN',
+                                 'SERVICE_PASSWORD', 'RABBIT_PASSWORD']:
+                if setting_name not in settings:
+                    settings[setting_name] = generate_secret()
+            self.tracker['settings'] = settings
+            self.tracker.sync()
+            self._settings = settings
+            return self._settings
+
+    def iter_server_by_kind(self, kind):
+        for server in self.iter_servers():
+            if server.kind == kind:
+                yield server
+
+    def __enter__(self):
+        return self
+
+    def bind_machine(self, server_name, machine):
+        matched_servers = [server for server in self.iter_servers()
+                           if server.name == server_name]
+        if not matched_servers:
+            raise RuntimeError("Can not match ssh machine"
+                               " to unknown server '%s'" % server_name)
+        self.machines[server_name] = machine
+        self._exit_stack.callback(machine.close)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._exit_stack.close()
 
 
 class Tracker(collections.MutableMapping):
     """Tracker that tracks data about a single cloud."""
 
-    def __init__(self, name, clouds, data):
-        self._clouds = weakref.proxy(clouds)
+    def __init__(self, data, saver):
         self._data = data
-        self._name = name
+        self._saver = saver
 
     def __setitem__(self, key, value):
         self._data[key] = value
@@ -60,60 +180,8 @@ class Tracker(collections.MutableMapping):
     def __getitem__(self, key):
         return self._data[key]
 
-    def save(self):
-        self._clouds.save()
-
-    sync = save
-
-
-class Clouds(object):
-    """Simple data storage, that should be multi-process safe."""
-
-    def __init__(self, path, lock_path):
-        self.path = path
-        self.lock = fasteners.InterProcessLock(lock_path)
-        self._clouds = {}
-
-    def get_tracker(self, cloud_name):
-        if not self.lock.acquired:
-            raise IOError("Can only get a cloud from a file that has"
-                          " been correctly locked")
-        try:
-            data = self._clouds[cloud_name]
-        except KeyError:
-            self._clouds[cloud_name] = data = {}
-            self.save()
-        return Tracker(cloud_name, self, data)
-
-    def open(self, blocking=False):
-        if self.lock.acquired:
-            return
-        gotten = self.lock.acquire(blocking=blocking)
-        if not gotten:
-            raise TooManyAtOnceException("Only one process at a time allowed")
-        with open(self.path, "a+b") as fh:
-            fh.seek(0)
-            contents = fh.read()
-            if contents:
-                self._clouds = pickle.loads(contents)
-            else:
-                self._clouds = {}
-
-    def save(self):
-        if not self.lock.acquired:
-            raise IOError("Can only save a cloud data object that has"
-                          " been correctly locked")
-        with open(self.path, "wb") as fh:
-            pickle.dump(self._clouds, fh, -1)
-            fh.flush()
-
-    def close(self):
-        if self.lock.acquired:
-            self.save()
-            self._clouds = {}
-            self.lock.release()
-
-    sync = save
+    def sync(self):
+        self._saver()
 
 
 class Spinner(object):
