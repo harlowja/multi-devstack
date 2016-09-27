@@ -598,31 +598,39 @@ def wait_servers(args, cloud, tracker, servers):
         server.ip = server_ip
 
 
-def create_topo(args, cloud, tracker):
+def create_topo(args, cloud, tracker, curr_servers):
+    def try_pick_name(name_tpl, new_names, max_attempts=100):
+        attempts = 0
+        while attempts < max_attempts:
+            name = name_tpl % {
+                'user': cloud.auth['username'],
+                'rand': random.randrange(1, 99),
+            }
+            if name not in curr_servers and name not in new_names:
+                return name
+            attempts += 1
+        raise RuntimeError("Unable to find name not already taken"
+                           " for server name template '%s'; tried"
+                           " %s times" % (name_tpl, max_attempts))
     if args.new_topo:
         topo = None
     else:
         topo = tracker.get("topo")
     if not topo:
         topo = copy.deepcopy(DEF_TOPO)
+    new_names = set()
     hvs = topo['compute']
     while len(hvs) < args.hypervisors:
-        hv_tpl = topo['templates'][Roles.HV]
-        name = hv_tpl % {
-            'user': cloud.auth['username'],
-            'rand': random.randrange(1, 99),
-        }
+        name = try_pick_name(topo['templates'][Roles.HV], new_names)
+        new_names.add(name)
         hvs.append(munch.Munch(name=name, filled=False,
                                kind=Roles.HV, builder_state=st.NO_STATE))
     topo['compute'] = hvs[0:args.hypervisors]
     for r in Roles:
         if r != Roles.HV:
             if r not in topo['control']:
-                name_tpl = topo['templates'][r]
-                name = name_tpl % {
-                    'user': cloud.auth['username'],
-                    'rand': random.randrange(1, 99),
-                }
+                name = try_pick_name(topo['templates'][r], new_names)
+                new_names.add(name)
                 topo['control'][r] = munch.Munch(
                     name=name, filled=False,
                     kind=r, builder_state=st.NO_STATE)
@@ -631,16 +639,13 @@ def create_topo(args, cloud, tracker):
     return topo
 
 
-def bake_servers(args, cloud, tracker, topo):
-    with utils.Spinner("Fetching existing servers", args.verbose):
-        all_servers = dict((server.name, server)
-                           for server in cloud.list_servers())
+def bake_servers(args, cloud, tracker, topo, curr_servers):
     missing_servers = []
     existing_servers = []
     for master_server in itertools.chain(topo['compute'],
                                          list(topo['control'].values())):
         try:
-            server = all_servers[master_server.name]
+            server = curr_servers[master_server.name]
         except KeyError:
             missing_servers.append(master_server)
         else:
@@ -813,11 +818,16 @@ def create(args, cloud, tracker):
                 raise RuntimeError("Can not create '%s' instances without"
                                    " matching flavor '%s'" % (kind, kind_flv))
             flavors[kind] = flv
+    with utils.Spinner("Fetching existing servers", args.verbose):
+        curr_servers = dict((server.name, server)
+                            for server in cloud.list_servers())
     # Create our topology and turn it into real servers...
     topo = fill_topo(args, cloud, tracker,
-                     create_topo(args, cloud, tracker), az_selector,
-                     flavors, image)
-    existing_servers, new_servers = bake_servers(args, cloud, tracker, topo)
+                     create_topo(args, cloud, tracker, curr_servers),
+                     az_selector, flavors, image)
+    existing_servers, new_servers = bake_servers(args, cloud,
+                                                 tracker, topo,
+                                                 curr_servers)
     wait_servers(args, cloud, tracker, existing_servers + new_servers)
     # Now turn those servers into something useful...
     max_workers = min(args.max_workers,
