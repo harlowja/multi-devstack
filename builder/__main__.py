@@ -29,8 +29,13 @@ TRACE = 5
 def make_saver(path, clouds):
 
     def saver():
-        with open(path, 'wb') as fh:
+        # Doing this ensures we perform this in a crash safe
+        # manner, so that even if we get interrupted while saving the
+        # original file is not messed up.
+        tmp_path = "%s.tmp" % path
+        with open(tmp_path, 'wb') as fh:
             fh.write(pickle.dumps(clouds, -1))
+        os.rename(tmp_path, path)
 
     return saver
 
