@@ -30,13 +30,9 @@ def make_saver(path, clouds):
 
     def saver():
         with open(path, 'a+b') as fh:
-            # First byte is used for the lock.
-            fh.seek(1)
-            # Chop off the old stuff.
+            fh.seek(0)
             fh.truncate()
             fh.flush()
-            # File pointer shouldn't have moved, but just incase...
-            fh.seek(1)
             fh.write(pickle.dumps(clouds, -1))
 
     return saver
@@ -44,30 +40,22 @@ def make_saver(path, clouds):
 
 @contextlib.contextmanager
 def fetch_tracker(path, cloud_name):
-    lock = utils.FileOffsetLock(path)
-    gotten = lock.acquire()
-    if not gotten:
-        raise RuntimeError("State path '%s' is currently in"
-                           " use (and only one application may"
-                           " manipulate it at a time)" % path)
+    with open(path, 'a+b') as fh:
+        fh_contents = fh.read()
+        if fh_contents:
+            clouds = pickle.loads(fh_contents)
+        else:
+            clouds = {}
+    saver = make_saver(path, clouds)
     try:
-        with open(path, 'a+b') as fh:
-            # First byte is used for the lock.
-            fh.seek(1)
-            fh_contents = fh.read()
-            if fh_contents:
-                clouds = pickle.loads(fh_contents)
-            else:
-                clouds = {}
-        saver = make_saver(path, clouds)
-        try:
-            cloud = clouds[cloud_name]
-        except KeyError:
-            clouds[cloud_name] = cloud = {}
-            saver()
+        cloud = clouds[cloud_name]
+    except KeyError:
+        clouds[cloud_name] = cloud = {}
+        saver()
+    try:
         yield utils.Tracker(cloud, saver)
     finally:
-        lock.release()
+        saver()
 
 
 def main():

@@ -6,7 +6,6 @@ from binascii import hexlify
 
 import collections
 import errno
-import fcntl
 import functools
 import itertools
 import os
@@ -32,39 +31,6 @@ from plumbum.machines.paramiko_machine import ParamikoMachine as SshMachine
 import builder as bu
 
 PASS_CHARS = string.ascii_lowercase + string.digits
-
-
-class FileOffsetLock(object):
-    """Remove me when https://github.com/harlowja/fasteners/pull/10 merges...
-
-    This lock is **not** thread safe, only safe across processes (aka it
-    is not thread aware).
-    """
-
-    def __init__(self, path, offset=0):
-        self.path = path
-        self.offset = offset
-        self.handle = open(path, 'a+b')
-        self.handle.seek(offset)
-        self.acquired = False
-
-    def acquire(self):
-        try:
-            fcntl.lockf(self.handle, fcntl.LOCK_EX | fcntl.LOCK_NB, 1,
-                        self.handle.tell(), os.SEEK_CUR)
-        except IOError as e:
-            if e.errno in (errno.EACCES, errno.EAGAIN):
-                return False
-            else:
-                raise
-        else:
-            self.acquired = True
-            return True
-
-    def release(self):
-        if self.acquired:
-            fcntl.lockf(self.handle, fcntl.LOCK_UN)
-            self.acquired = False
 
 
 class BuildHelper(object):

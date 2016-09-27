@@ -28,8 +28,6 @@ def main():
                         default=None)
     args = parser.parse_args()
     with open(args.state, 'rb') as fh:
-        # The inter-process lock is at byte 0, so shift one forward.
-        fh.seek(1)
         contents = fh.read()
         if contents:
             data = pickle.loads(contents)
