@@ -32,6 +32,11 @@ def make_saver(path, clouds):
         with open(path, 'a+b') as fh:
             # First byte is used for the lock.
             fh.seek(1)
+            # Chop off the old stuff.
+            fh.truncate()
+            fh.flush()
+            # File pointer shouldn't have moved, but just incase...
+            fh.seek(1)
             fh.write(pickle.dumps(clouds, -1))
 
     return saver
