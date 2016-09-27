@@ -57,9 +57,9 @@ class FileOffsetLock(object):
                 return False
             else:
                 raise
-         else:
-             self.acquired = True
-             return True
+        else:
+            self.acquired = True
+            return True
 
     def release(self):
         if self.acquired:

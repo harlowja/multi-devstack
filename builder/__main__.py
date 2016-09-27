@@ -7,8 +7,8 @@ import collections
 import contextlib
 import hashlib
 import logging
-import pickle
 import os
+import pickle
 import sys
 import traceback
 
