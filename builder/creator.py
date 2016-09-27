@@ -340,7 +340,15 @@ def create_overlay(args, helper, indent=''):
 
 
 def output_cloud(args, helper, indent=''):
-    pass
+    # This clones a tiny part of what devstack does...
+    ks_servers = list(helper.iter_server_by_kind(Roles.MAP))
+    # For now there is only one of these (and we need to find a better
+    # way to find the port)...
+    ks_server = ks_servers[0]
+    ks_uri = "http://%s:5000/" % ks_server.hostname
+    print("Keystone is serving at %s" % ks_uri)
+    print("The default users/tenants are: admin/admin and demo/demo")
+    print("The password: %s" % helper.settings['ADMIN_PASSWORD'])
 
 
 def clone_devstack(args, helper, server, indent='', last_result=None):
