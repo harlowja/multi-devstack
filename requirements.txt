@@ -8,5 +8,4 @@ jinja2
 six
 contextlib2
 enum34
-fasteners
 oslo.utils
