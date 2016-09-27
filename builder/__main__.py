@@ -29,10 +29,7 @@ TRACE = 5
 def make_saver(path, clouds):
 
     def saver():
-        with open(path, 'a+b') as fh:
-            fh.seek(0)
-            fh.truncate()
-            fh.flush()
+        with open(path, 'wb') as fh:
             fh.write(pickle.dumps(clouds, -1))
 
     return saver
@@ -40,13 +37,24 @@ def make_saver(path, clouds):
 
 @contextlib.contextmanager
 def fetch_tracker(path, cloud_name):
-    with open(path, 'a+b') as fh:
-        fh_contents = fh.read()
-        if fh_contents:
-            clouds = pickle.loads(fh_contents)
-        else:
+    needs_save = False
+    try:
+        with open(path, 'rb') as fh:
+            fh_contents = fh.read()
+            if fh_contents:
+                clouds = pickle.loads(fh_contents)
+            else:
+                clouds = {}
+                needs_save = True
+    except IOError as e:
+        if e.errno == errno.ENOENT:
             clouds = {}
+            needs_save = True
+        else:
+            raise
     saver = make_saver(path, clouds)
+    if needs_save:
+        saver()
     try:
         cloud = clouds[cloud_name]
     except KeyError:
